@@ -1,990 +1,882 @@
-import { useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Routes,
-  Route,
+  ArrowRight,
+  BarChart3,
+  Box,
+  Building2,
+  CalendarCheck,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  CircleHelp,
+  ClipboardCheck,
+  ClipboardList,
+  Clock3,
+  Cog,
+  Download,
+  Factory,
+  FileText,
+  Headphones,
+  LayoutDashboard,
+  MapPin,
+  Menu,
+  Minus,
+  PackageCheck,
+  Plus,
+  Printer,
+  ReceiptText,
+  Search,
+  ShieldCheck,
+  ShoppingCart,
+  SlidersHorizontal,
+  Sparkles,
+  Store,
+  Truck,
+  Upload,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
+import {
   Link,
+  Navigate,
+  Route,
+  Routes,
   useNavigate,
   useParams,
   useSearchParams,
 } from "react-router-dom";
+import cncWaterjet from "./assets/cnc-waterjet-public-domain.jpg";
+import carbideInsertsPhoto from "./assets/tungsten-carbide-inserts-cc-by-sa-4.jpg";
+import toolHolderPhoto from "./assets/tool-holder-cc-by-sa-4.jpg";
 import {
-  Search,
-  ShoppingCart,
-  UserRound,
-  Globe2,
-  ChevronRight,
-  ShieldCheck,
-  Headphones,
-  Factory,
-  SlidersHorizontal,
-  Minus,
-  Plus,
-  Trash2,
-  Heart,
-  PackageCheck,
-  FileText,
-  MapPin,
-  Clock3,
-  CheckCircle2,
-  X,
-} from "lucide-react";
-import { categories, products, getProduct, Product } from "./data/products";
+  categories,
+  familyMinPrice,
+  findFamilies,
+  getFamily,
+  getProduct,
+  productFamilies,
+  Product,
+  ProductFamily,
+  ProductVariant,
+} from "./data/products";
 import s from "./App.module.scss";
 
-const toolIcon = (color = "#587181") => (
-  <svg viewBox="0 0 120 120" aria-hidden="true">
-    <defs>
-      <linearGradient
-        id={`g${color.replace("#", "")}`}
-        x1="0"
-        y1="0"
-        x2="1"
-        y2="1"
-      >
-        <stop stopColor="#f4f7f8" />
-        <stop offset=".5" stopColor={color} />
-        <stop offset="1" stopColor="#223541" />
-      </linearGradient>
-    </defs>
-    <path
-      d="M18 73 66 25l21 8 16 31-46 31z"
-      fill={`url(#g${color.replace("#", "")})`}
-    />
-    <path d="m18 73 39 22 46-31-38-13z" fill="#b8c4cc" />
-    <circle
-      cx="69"
-      cy="59"
-      r="10"
-      fill="#f6f8f9"
-      stroke="#304653"
-      strokeWidth="5"
-    />
-    <path d="M89 37 105 6l8 3-10 55z" fill="#d8a43b" />
-  </svg>
+type Cart = Record<string, number>;
+type TaxMode = "含税" | "未税";
+type Settlement = "现金" | "月结" | "当月结";
+type OrderStatus = "待卖家审核" | "待支付" | "已确认" | "已发货" | "已完成" | "已拒绝";
+type DeliveryStatus = "已自动生成" | "待发货" | "已发货" | "已签收";
+
+type OrderItem = {
+  familyId: string;
+  familyName: string;
+  model: string;
+  sku: string;
+  spec: string;
+  quantity: number;
+  price: number;
+  total: number;
+  taxRate: number;
+};
+
+type Order = {
+  id: string;
+  orderNo: string;
+  deliveryNo: string;
+  createdAt: string;
+  expectedShipDate: string;
+  expectedShipText: string;
+  status: OrderStatus;
+  deliveryStatus: DeliveryStatus;
+  paymentStatus: "待确认" | "模拟待支付" | "已模拟支付";
+  company: string;
+  contact: string;
+  phone: string;
+  address: string;
+  logistics: string;
+  taxMode: TaxMode;
+  taxRate: number;
+  settlement: Settlement;
+  remark: string;
+  items: OrderItem[];
+  total: number;
+};
+
+const CART_KEY = "jz-cnc-cart-v2";
+const ORDER_KEY = "jz-cnc-orders-v2";
+const DELIVERY_SEQ_KEY = "jz-cnc-delivery-seq-v2";
+const DELIVERY_PREFIX_KEY = "jz-cnc-delivery-prefix-v2";
+const ANNOUNCEMENT_KEY = "jz-cnc-announcement-seen-v2";
+
+const money = (value: number) =>
+  new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency: "CNY",
+    minimumFractionDigits: 2,
+  }).format(value);
+
+const cx = (...names: Array<string | false | undefined>) =>
+  names.filter(Boolean).join(" ");
+
+const readStored = <T,>(key: string, fallback: T): T => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const formatDateTime = (value: string) =>
+  new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+
+const dateKey = (date: Date) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+
+const orderDateKey = (date: Date) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(date)
+    .replaceAll("-", "");
+
+const shippingPromise = (now: Date, inStock = true) => {
+  const chinaTime = new Date(
+    now.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }),
+  );
+  if (!inStock) {
+    return {
+      date: dateKey(chinaTime),
+      text: "预售规格，交期以卖家确认结果为准",
+      sameDay: false,
+    };
+  }
+  const cutoffPassed =
+    chinaTime.getHours() * 60 + chinaTime.getMinutes() >= 18 * 60 + 30;
+  if (cutoffPassed) {
+    chinaTime.setDate(chinaTime.getDate() + 1);
+  }
+  return {
+    date: dateKey(chinaTime),
+    text: cutoffPassed ? "18:30 后下单，预计次日发货" : "18:30 前下单，预计当天发货",
+    sameDay: !cutoffPassed,
+  };
+};
+
+const nextDeliveryNo = () => {
+  const prefix = localStorage.getItem(DELIVERY_PREFIX_KEY) || "XS";
+  const current = Number(localStorage.getItem(DELIVERY_SEQ_KEY) || "348998");
+  const next = current + 1;
+  localStorage.setItem(DELIVERY_SEQ_KEY, String(next));
+  return prefix + String(next).padStart(6, "0");
+};
+
+const orderNo = (count: number) =>
+  "JZ" + orderDateKey(new Date()) + String(count + 1).padStart(3, "0");
+
+let demoOrderIdSequence = 0;
+const createClientOrderId = () => {
+  demoOrderIdSequence += 1;
+  return crypto.randomUUID?.() ?? "jz-demo-order-" + demoOrderIdSequence;
+};
+
+const ToolArt = ({
+  color,
+  label,
+  compact = false,
+}: {
+  color: string;
+  label: string;
+  compact?: boolean;
+}) => (
+  <div
+    className={cx(s.toolArt, compact && s.compactToolArt)}
+    style={{ "--tool-color": color } as React.CSSProperties}
+    aria-label={label + "规格示意图"}
+    role="img"
+  >
+    <svg viewBox="0 0 180 150" aria-hidden="true">
+      <path d="M17 94 83 27l33 12 35 42-69 43z" fill="var(--tool-color)" />
+      <path d="m17 94 66 30 68-43-53-17z" fill="#b8c7ce" />
+      <path d="m83 27 50 18 18 36-35-42z" fill="#2a414d" opacity=".72" />
+      <circle cx="100" cy="77" r="15" fill="#fbfdff" stroke="#263e4b" strokeWidth="7" />
+      <path d="m132 44 22-35 14 5-17 67z" fill="#d5a132" />
+      <path d="M28 103 91 67" stroke="#ffffff" strokeWidth="2" opacity=".6" />
+    </svg>
+    <span>规格示意</span>
+  </div>
 );
-const money = (n: number, usd: boolean) =>
-  usd ? `$${(n / 7.15).toFixed(2)}` : `¥${n.toFixed(2)}`;
 
 function App() {
-  const [cart, setCart] = useState<Record<string, number>>(() =>
-    JSON.parse(localStorage.getItem("pt-cart") || "{}"),
-  );
-  const [usd, setUsd] = useState(false);
-  const [lang, setLang] = useState(false);
+  const [cart, setCart] = useState<Cart>(() => readStored(CART_KEY, {}));
+  const cartRef = useRef(cart);
+  const [orders, setOrders] = useState<Order[]>(() => readStored(ORDER_KEY, []));
+  const ordersRef = useRef(orders);
   const [toast, setToast] = useState("");
-  const add = (id: string, q = 1) => {
-    const next = { ...cart, [id]: (cart[id] || 0) + q };
-    setCart(next);
-    localStorage.setItem("pt-cart", JSON.stringify(next));
-    setToast("已加入采购车");
-    setTimeout(() => setToast(""), 2200);
+  const [announcementOpen, setAnnouncementOpen] = useState(
+    () => !localStorage.getItem(ANNOUNCEMENT_KEY),
+  );
+
+  useEffect(() => {
+    cartRef.current = cart;
+    localStorage.setItem(CART_KEY, JSON.stringify(cart));
+  }, [cart]);
+
+  useEffect(() => {
+    ordersRef.current = orders;
+    localStorage.setItem(ORDER_KEY, JSON.stringify(orders));
+  }, [orders]);
+
+  const pushToast = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2400);
   };
+
+  const persistCart = (next: Cart) => {
+    cartRef.current = next;
+    localStorage.setItem(CART_KEY, JSON.stringify(next));
+    setCart(next);
+  };
+
+  const addOrder = (order: Order) => {
+    const next = [order, ...ordersRef.current];
+    ordersRef.current = next;
+    localStorage.setItem(ORDER_KEY, JSON.stringify(next));
+    setOrders(next);
+  };
+
+  const add = (productId: string, quantity?: number) => {
+    const product = getProduct(productId);
+    const amount = quantity || product.moq;
+    const next = {
+      ...cartRef.current,
+      [product.id]: (cartRef.current[product.id] || 0) + amount,
+    };
+    persistCart(next);
+    pushToast("已加入采购车");
+  };
+
+  const updateCart = (productId: string, quantity: number) => {
+    const next = { ...cartRef.current };
+    if (quantity <= 0) delete next[productId];
+    else next[productId] = quantity;
+    persistCart(next);
+  };
+
+  const cartItems = Object.entries(cart)
+    .map(([id, quantity]) => ({ product: getProduct(id), quantity }))
+    .filter(({ product }) => product.id);
+
   return (
-    <div>
-      <Header
-        count={Object.values(cart).reduce((a, b) => a + b, 0)}
-        usd={usd}
-        setUsd={setUsd}
-        lang={lang}
-        setLang={setLang}
-      />
+    <div className={s.app}>
+      <Header cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} />
       <main id="main">
         <Routes>
-          <Route path="/" element={<Home add={add} usd={usd} />} />
-          <Route path="/products" element={<Catalog add={add} usd={usd} />} />
-          <Route path="/search" element={<Catalog add={add} usd={usd} />} />
-          <Route path="/product/:id" element={<Detail add={add} usd={usd} />} />
+          <Route path="/" element={<Home add={add} />} />
+          <Route path="/products" element={<Catalog add={add} />} />
+          <Route path="/search" element={<Catalog add={add} />} />
+          <Route path="/product/:id" element={<ProductDetailRoute add={add} />} />
           <Route
             path="/cart"
-            element={<Cart cart={cart} setCart={setCart} usd={usd} />}
+            element={
+              <CartPage
+                items={cartItems}
+                updateCart={updateCart}
+                add={add}
+              />
+            }
           />
-          <Route path="/quote" element={<Quote cart={cart} />} />
-          <Route path="/account/*" element={<Account />} />
+          <Route
+            path="/checkout"
+            element={
+              <Checkout items={cartItems} orders={orders} onOrder={addOrder} />
+            }
+          />
+          <Route
+            path="/order-success/:id"
+            element={<OrderSuccess orders={orders} clearCart={() => persistCart({})} />}
+          />
+          <Route path="/orders" element={<OrdersPage orders={orders} />} />
+          <Route path="/delivery/:id" element={<DeliveryNote orders={orders} />} />
+          <Route
+            path="/seller/*"
+            element={<SellerConsole orders={orders} onChangeOrders={setOrders} />}
+          />
+          <Route path="/account/*" element={<AccountHub orders={orders} />} />
+          <Route path="/tool-selector" element={<ToolSelector add={add} />} />
+          <Route path="/batch-order" element={<BatchOrder add={add} />} />
+          <Route path="/purchase-analysis" element={<PurchaseAnalysis orders={orders} />} />
+          <Route path="/quote" element={<Navigate replace to="/checkout" />} />
+          <Route path="/support" element={<SupportPage />} />
+          <Route path="/about" element={<AboutPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
       <Footer />
-      <MobileNav count={Object.keys(cart).length} />
+      <MobileNav cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} />
+      {announcementOpen && (
+        <Announcement onClose={() => {
+          localStorage.setItem(ANNOUNCEMENT_KEY, "1");
+          setAnnouncementOpen(false);
+        }} />
+      )}
       {toast && (
-        <div className={s.toast}>
-          <CheckCircle2 /> {toast}
+        <div className={s.toast} role="status">
+          <CheckCircle2 size={18} /> {toast}
         </div>
       )}
     </div>
   );
 }
 
-function Header({
-  count,
-  usd,
-  setUsd,
-  lang,
-  setLang,
-}: {
-  count: number;
-  usd: boolean;
-  setUsd: (v: boolean) => void;
-  lang: boolean;
-  setLang: (v: boolean) => void;
-}) {
-  const nav = useNavigate();
-  const [q, setQ] = useState("");
+function Header({ cartCount }: { cartCount: number }) {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    navigate("/search?q=" + encodeURIComponent(query));
+  };
   return (
     <>
-      <a className={s.skip} href="#main">
-        跳至主要内容
-      </a>
-      <div className={s.top}>
-        <div>专注金属切削解决方案 · 企业采购支持</div>
+      <a className={s.skip} href="#main">跳至主要内容</a>
+      <div className={s.topBar}>
+        <div>杰帜数控刀具 · 企业采购支持</div>
         <div>
-          <span>品质保障</span>
-          <span>技术选型</span>
-          <span>工作日 8:30–18:00</span>
+          <span><Clock3 size={14} /> 18:30 前下单当天发</span>
+          <span>品质与型号核验</span>
         </div>
       </div>
       <header className={s.header}>
         <div className={s.headerInner}>
-          <Link className={s.brand} to="/">
-            <span className={s.mark}>PT</span>
+          <Link className={s.brand} to="/" aria-label="杰帜数控刀具首页">
+            <span className={s.mark}>JZ</span>
             <span>
               <b>杰帜数控刀具</b>
-              <small>PRECISION TOOLS</small>
+              <small>JIEZHI CNC TOOLS</small>
             </span>
           </Link>
-          <form
-            className={s.search}
-            onSubmit={(e) => {
-              e.preventDefault();
-              nav(`/search?q=${encodeURIComponent(q)}`);
-            }}
-          >
-            <Search size={20} />
+          <form className={s.search} onSubmit={submit}>
+            <Search size={19} />
             <input
-              aria-label="搜索商品"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索型号、刀具名称、材质或品牌"
+              aria-label="搜索型号、规格或品牌"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索型号、规格、品牌，例如 PCLNR / CNMG120408 / D10"
             />
-            <button data-testid="global-search">搜索</button>
+            <button data-testid="global-search" type="submit">搜索</button>
           </form>
           <div className={s.actions}>
-            <button aria-label="切换语言" onClick={() => setLang(!lang)}>
-              <Globe2 />
-              {lang ? "EN" : "中"}
-            </button>
-            <button onClick={() => setUsd(!usd)}>{usd ? "USD" : "CNY"}</button>
-            <Link to="/account">
-              <UserRound />
-              账户
-            </Link>
-            <Link className={s.cartLink} to="/cart">
-              <ShoppingCart />
-              采购车<i>{count}</i>
-            </Link>
+            <Link to="/tool-selector"><Sparkles /> 选型</Link>
+            <Link to="/orders"><ClipboardList /> 订单</Link>
+            <Link to="/account"><UserRound /> 我的</Link>
+            <Link className={s.cartLink} to="/cart"><ShoppingCart /> 采购车 <i>{cartCount}</i></Link>
           </div>
         </div>
-        <nav className={s.nav}>
+        <nav className={s.nav} aria-label="主导航">
           <Link to="/">首页</Link>
-          <Link to="/products?tag=hot">热销刀具</Link>
-          <Link to="/products?tag=new">新品专区</Link>
-          <Link to="/quote">定制与询价</Link>
-          <Link to="/account">企业服务</Link>
+          <Link to="/products?category=主夹">主夹</Link>
+          <Link to="/products?category=背夹">背夹</Link>
+          <Link to="/products">型号分类</Link>
+          <Link to="/batch-order">快速下单</Link>
+          <Link to="/seller">卖家中心</Link>
+          <Link to="/support">企业服务</Link>
         </nav>
       </header>
     </>
   );
 }
 
-const ProductCard = ({
-  p,
-  add,
-  usd,
-}: {
-  p: Product;
-  add: (id: string) => void;
-  usd: boolean;
-}) => (
-  <article className={s.productCard} data-testid={`product-${p.id}`}>
-    <Link to={`/product/${p.id}`} className={s.productImg}>
-      {p.tag && <span>{p.tag}</span>}
-      {toolIcon(p.color)}
-    </Link>
-    <div className={s.productBody}>
-      <small>{p.category}</small>
-      <Link to={`/product/${p.id}`}>
-        <h3>{p.name}</h3>
-        <b className={s.model}>{p.model}</b>
-      </Link>
-      <dl>
-        <div>
-          <dt>规格</dt>
-          <dd>{p.size}</dd>
-        </div>
-        <div>
-          <dt>材质/涂层</dt>
-          <dd>
-            {p.material} · {p.coating}
-          </dd>
-        </div>
-      </dl>
-      <div className={s.stock}>
-        <span>库存 {p.stock > 0 ? p.stock : "待确认"}</span>
-        <span>{p.moq}件起订</span>
-      </div>
-      <div className={s.cardBottom}>
-        <strong>
-          {money(p.price, usd)}
-          <small>/件</small>
-        </strong>
-        <button onClick={() => add(p.id)} aria-label={`加入采购车 ${p.model}`}>
-          <Plus /> 加购
-        </button>
-      </div>
-    </div>
-  </article>
-);
-
-function Home({ add, usd }: { add: (id: string) => void; usd: boolean }) {
+function Home({ add }: { add: (id: string, quantity?: number) => void }) {
+  const primaryCategories = categories.slice(0, 6);
   return (
     <>
       <section className={s.hero}>
+        <div className={s.heroPhoto}>
+          <img src={cncWaterjet} alt="CNC 数控加工现场实拍" />
+          <small>加工场景实拍 · 公共领域素材 · 非具体 SKU 商品图</small>
+        </div>
         <div className={s.heroInner}>
-          <div>
-            <span className={s.eyebrow}>
-              PRECISION · RELIABILITY · EFFICIENCY
-            </span>
-            <h1>
-              让每一次切削
-              <br />
-              <em>精准而高效</em>
-            </h1>
-            <p>
-              覆盖车、铣、钻、螺纹加工的专业刀具供应平台。快速选型、透明库存、企业级询报价服务。
-            </p>
-            <div className={s.heroBtns}>
-              <Link className={s.primary} to="/products">
-                浏览全部刀具 <ChevronRight />
-              </Link>
-              <Link className={s.secondary} to="/quote">
-                提交选型需求
-              </Link>
+          <div className={s.heroCopy}>
+            <span className={s.eyebrow}>JIEZHI CNC · MODEL FIRST</span>
+            <h1>按型号选对刀具，<em>按规格直接下单</em></h1>
+            <p>主夹、背夹与刀具型号集中管理；同型号的尺寸、左右向、牌号和包装在同一页核对后再下单。</p>
+            <div className={s.heroButtons}>
+              <Link className={s.primary} to="/products"><Search /> 搜型号 / 规格 <ChevronRight /></Link>
+              <Link className={s.secondary} to="/tool-selector"><Sparkles /> 工艺选型助手</Link>
+            </div>
+            <div className={s.shippingPromise}>
+              <Truck />
+              <div><b>发货承诺</b><span>18:30 前完成下单，现货规格当天发；18:30 后次日发货。</span></div>
             </div>
           </div>
-          <div className={s.heroArt}>
-            <div className={s.orbit} />
-            {toolIcon("#587484")}
-          </div>
+          <aside className={s.heroPanel}>
+            <span>型号优先采购</span>
+            <h2>先选型号，再选规格</h2>
+            <ol>
+              <li><b>01</b><span>输入型号或从主夹 / 背夹分类进入</span></li>
+              <li><b>02</b><span>在规格矩阵确认尺寸、方向、库存和 MOQ</span></li>
+              <li><b>03</b><span>提交订单后系统自动生成固定送货单</span></li>
+            </ol>
+            <Link to="/batch-order">批量输入型号 <ArrowRight /></Link>
+          </aside>
         </div>
       </section>
       <section className={s.container}>
         <div className={s.sectionHead}>
-          <div>
-            <span>PRODUCT CATEGORIES</span>
-            <h2>按加工工艺选刀具</h2>
-          </div>
-          <Link to="/products">
-            查看全部分类 <ChevronRight />
-          </Link>
+          <div><span>PRODUCT CATEGORIES</span><h2>按产品大类快速进入</h2></div>
+          <Link to="/products">查看全部型号 <ChevronRight /></Link>
         </div>
-        <div className={s.categories}>
-          {categories.map((c, i) => (
-            <Link to={`/products?category=${c[0]}`} key={c[0]}>
-              <span className={s.catIcon}>
-                {toolIcon(
-                  [
-                    "#4d6978",
-                    "#9c894e",
-                    "#536f82",
-                    "#647986",
-                    "#c0a14d",
-                    "#344c5c",
-                  ][i],
-                )}
-              </span>
-              <div>
-                <b>{c[0]}</b>
-                <small>{c[1]}</small>
-              </div>
-              <ChevronRight />
-            </Link>
-          ))}
+        <div className={s.categoryGrid}>
+          {primaryCategories.map(([name, description], index) => {
+            const icons = [Box, ClipboardCheck, Factory, Cog, CircleHelp, PackageCheck];
+            const Icon = icons[index];
+            return (
+              <Link key={name} to={"/products?category=" + encodeURIComponent(name)}>
+                <span className={s.categoryIcon}><Icon /></span>
+                <b>{name}</b>
+                <small>{description}</small>
+                <ChevronRight />
+              </Link>
+            );
+          })}
         </div>
       </section>
-      <section className={s.darkBand}>
+      <section className={s.featureBand}>
         <div className={s.container}>
           <div className={s.sectionHead}>
-            <div>
-              <span>ENGINEER'S SELECTION</span>
-              <h2>工程师严选</h2>
-            </div>
-            <Link to="/products">
-              更多产品 <ChevronRight />
-            </Link>
+            <div><span>MODEL FAMILIES</span><h2>高频型号 · 规格集中选择</h2></div>
+            <Link to="/products">进入型号中心 <ChevronRight /></Link>
           </div>
           <div className={s.productGrid}>
-            {products.slice(0, 4).map((p) => (
-              <ProductCard key={p.id} p={p} add={add} usd={usd} />
-            ))}
+            {productFamilies.slice(0, 4).map((item) => <FamilyCard key={item.id} family={item} add={add} />)}
           </div>
         </div>
       </section>
-      <section className={`${s.container} ${s.services}`}>
-        <div>
-          <ShieldCheck />
-          <b>原厂品质保障</b>
-          <span>严格供应商准入与批次追溯</span>
-        </div>
-        <div>
-          <Factory />
-          <b>企业批量采购</b>
-          <span>阶梯价格与专属合同支持</span>
-        </div>
-        <div>
-          <PackageCheck />
-          <b>稳定库存交付</b>
-          <span>常用型号现货快速出库</span>
-        </div>
-        <div>
-          <Headphones />
-          <b>应用技术支持</b>
-          <span>工程师协助选型与参数建议</span>
+      <section className={cx(s.container, s.homeWorkflow)}>
+        <div><span>ORDER TO DELIVERY NOTE</span><h2>订单与固定送货单自动关联</h2><p>客户提交订单后即时生成送货单编号和不可变订单快照。卖家审核、打印、人工盖章和人工发货仍由商家确认。</p></div>
+        <div className={s.workflowSteps}>
+          {[
+            ["选择型号", "同型号规格归类"],
+            ["提交订单", "税务、结款、物流一起记录"],
+            ["自动送货单", "固定 XS 编号与模板"],
+            ["卖家发货", "审核、打印、盖章、发货"],
+          ].map(([title, detail], index) => (
+            <div key={title}><b>0{index + 1}</b><strong>{title}</strong><span>{detail}</span></div>
+          ))}
         </div>
       </section>
     </>
   );
 }
 
-function Catalog({ add, usd }: { add: (id: string) => void; usd: boolean }) {
-  const [sp] = useSearchParams();
-  const [q, setQ] = useState(sp.get("q") || "");
-  const [cat, setCat] = useState(sp.get("category") || "全部刀具");
-  const [material, setMaterial] = useState("全部");
-  const [sort, setSort] = useState("综合排序");
-  const [showFilters, setShowFilters] = useState(false);
-  const list = useMemo(
-    () =>
-      products
-        .filter(
-          (p) =>
-            ((cat === "全部刀具" || p.category === cat) &&
-              material === "全部") ||
-            false,
-        )
-        .filter((p) => material === "全部" || p.material === material)
-        .filter(
-          (p) =>
-            !q ||
-            `${p.name}${p.model}${p.material}`
-              .toLowerCase()
-              .includes(q.toLowerCase()),
-        )
-        .sort((a, b) =>
-          sort === "价格从低到高"
-            ? a.price - b.price
-            : sort === "库存优先"
-              ? b.stock - a.stock
-              : 0,
-        ),
-    [q, cat, material, sort],
-  );
+function FamilyCard({ family, add }: { family: ProductFamily; add: (id: string, quantity?: number) => void }) {
+  const first = family.variants[0];
+  const industryPhoto = family.category === "可转位刀片"
+    ? carbideInsertsPhoto
+    : family.category === "主夹" || family.category === "背夹"
+      ? toolHolderPhoto
+      : undefined;
   return (
-    <div className={s.catalogWrap}>
-      <div className={s.breadcrumb}>
-        首页 <ChevronRight /> 商品中心
-      </div>
-      <div className={s.catalogHeader}>
-        <div>
-          <span>PRECISION TOOLING</span>
-          <h1>精密刀具产品中心</h1>
-          <p>按工艺、材质与规格快速定位适合的切削方案</p>
-        </div>
-        <div className={s.catalogSearch}>
-          <Search />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="在结果中搜索型号"
-          />
+    <article className={s.familyCard} data-testid={"family-" + family.id}>
+      <Link to={"/product/" + family.id} className={s.productVisual}>
+        {family.tag && <span>{family.tag}</span>}
+        {industryPhoto ? <>
+          <img className={s.industryPhoto} src={industryPhoto} alt={`${family.category}行业实拍，非杰帜具体 SKU 商品图`} />
+          <i className={s.industryPhotoNote}>行业实拍 · 非 SKU 图</i>
+        </> : <ToolArt color={family.color} label={family.name} />}
+      </Link>
+      <div className={s.familyBody}>
+        <small>{family.category} · {family.subcategory}</small>
+        <Link to={"/product/" + family.id}><h3>{family.name}</h3><b>{family.model}</b></Link>
+        <p>{family.variants.length} 个可选规格 · {family.materialHint}</p>
+        <div className={s.familyBottom}>
+          <strong>{money(familyMinPrice(family))}<small> 起</small></strong>
+          <button onClick={() => add(first.id, first.moq)}><Plus /> 加购</button>
         </div>
       </div>
+    </article>
+  );
+}
+
+function Catalog({ add }: { add: (id: string, quantity?: number) => void }) {
+  const [params] = useSearchParams();
+  const [query, setQuery] = useState(params.get("q") || "");
+  const [category, setCategory] = useState(params.get("category") || "全部");
+  const [material, setMaterial] = useState("全部");
+  const [sort, setSort] = useState("推荐");
+  const list = useMemo(() => {
+    const result = findFamilies(query, category).filter((family) =>
+      material === "全部" ||
+      family.materialHint.includes(material) ||
+      family.variants.some((variant) => variant.material.includes(material)),
+    );
+    return [...result].sort((a, b) => {
+      if (sort === "价格") return familyMinPrice(a) - familyMinPrice(b);
+      if (sort === "规格数") return b.variants.length - a.variants.length;
+      return 0;
+    });
+  }, [category, material, query, sort]);
+  return (
+    <div className={s.catalogPage}>
+      <div className={s.breadcrumb}>首页 <ChevronRight /> 商品中心</div>
+      <section className={s.catalogIntro}>
+        <div><span>MODEL CATALOG</span><h1>按型号集中管理商品规格</h1><p>列表展示主型号；进入详情页后再选择精确的尺寸、方向、牌号或包装规格。</p></div>
+        <label className={s.catalogSearch}><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索型号、SKU、规格或品牌" /></label>
+      </section>
       <div className={s.catalogLayout}>
-        <aside className={`${s.filters} ${showFilters ? s.open : ""}`}>
-          <button
-            className={s.filterClose}
-            onClick={() => setShowFilters(false)}
-          >
-            <X />
-            关闭
-          </button>
-          <h2>产品分类</h2>
-          {["全部刀具", ...categories.map((c) => c[0])].map((c) => (
-            <button
-              className={cat === c ? s.active : ""}
-              onClick={() => setCat(c)}
-              key={c}
-            >
-              {c}
-              <span>
-                {c === "全部刀具"
-                  ? products.length
-                  : products.filter((p) => p.category === c).length}
-              </span>
+        <aside className={s.filters}>
+          <div className={s.filterTitle}><SlidersHorizontal /><b>筛选型号</b></div>
+          <h2>一级分类</h2>
+          {["全部", ...categories.map(([name]) => name)].map((name) => (
+            <button className={category === name ? s.active : ""} key={name} onClick={() => setCategory(name)}>
+              {name}<span>{name === "全部" ? productFamilies.length : productFamilies.filter((item) => item.category === name).length}</span>
             </button>
           ))}
-          <h2>刀具材质</h2>
-          {["全部", "硬质合金", "高速钢", "CBN", "合金钢"].map((m) => (
-            <label key={m}>
-              <input
-                type="radio"
-                name="material"
-                checked={material === m}
-                onChange={() => setMaterial(m)}
-              />
-              {m}
-            </label>
+          <h2>常见材质</h2>
+          {["全部", "硬质合金", "42CrMo", "合金钢", "HSS-Co"].map((name) => (
+            <label key={name}><input type="radio" name="material" checked={material === name} onChange={() => setMaterial(name)} /> {name}</label>
           ))}
-          <h2>精度等级</h2>
-          {["普通级", "精密级", "超精密级"].map((m) => (
-            <label key={m}>
-              <input type="checkbox" />
-              {m}
-            </label>
-          ))}
+          <div className={s.filterHint}><ShieldCheck /> 实际库存、价格与交期将在接入商品主数据后同步；当前为可操作演示数据。</div>
         </aside>
         <section className={s.results}>
-          <div className={s.resultBar}>
-            <span>
-              共找到 <b>{list.length}</b> 件商品
-            </span>
-            <button
-              className={s.mobileFilter}
-              onClick={() => setShowFilters(true)}
-            >
-              <SlidersHorizontal />
-              筛选
-            </button>
-            <select
-              aria-label="商品排序"
-              value={sort}
-              onChange={(e) => setSort(e.target.value)}
-            >
-              <option>综合排序</option>
-              <option>价格从低到高</option>
-              <option>库存优先</option>
-            </select>
-          </div>
-          {list.length ? (
-            <div className={s.productGrid}>
-              {list.map((p) => (
-                <ProductCard p={p} key={p.id} add={add} usd={usd} />
-              ))}
-            </div>
-          ) : (
-            <div className={s.empty}>
-              <Search />
-              <h2>没有找到匹配商品</h2>
-              <p>请尝试缩短型号或清除筛选条件</p>
-              <button
-                onClick={() => {
-                  setQ("");
-                  setCat("全部刀具");
-                  setMaterial("全部");
-                }}
-              >
-                重置筛选
-              </button>
-            </div>
-          )}
+          <div className={s.resultBar}><span>找到 <b>{list.length}</b> 个型号家族</span><label>排序 <select value={sort} onChange={(event) => setSort(event.target.value)}><option value="推荐">推荐</option><option value="价格">价格从低到高</option><option value="规格数">规格数</option></select></label></div>
+          {list.length ? <div className={s.productGrid}>{list.map((family) => <FamilyCard key={family.id} family={family} add={add} />)}</div> : <Empty icon={<Search />} title="没有找到匹配型号" description="请检查型号、规格或清除筛选条件后再试。" action={<button onClick={() => { setQuery(""); setCategory("全部"); setMaterial("全部"); }}>重置筛选</button>} />}
         </section>
       </div>
     </div>
   );
 }
 
-function Detail({
-  add,
-  usd,
-}: {
-  add: (id: string, q?: number) => void;
-  usd: boolean;
-}) {
+function ProductDetailRoute({ add }: { add: (id: string, quantity?: number) => void }) {
   const { id } = useParams();
-  const p = getProduct(id);
-  const [qty, setQty] = useState(p.moq);
-  const [liked, setLiked] = useState(false);
+  return <ProductDetail key={id} add={add} />;
+}
+
+function ProductDetail({ add }: { add: (id: string, quantity?: number) => void }) {
+  const { id } = useParams();
+  const family = getFamily(id);
+  const [selected, setSelected] = useState<ProductVariant>(family.variants[0]);
+  const [quantity, setQuantity] = useState(family.variants[0].moq);
   const [tab, setTab] = useState("规格参数");
+  const navigate = useNavigate();
+  const delivery = shippingPromise(new Date(), selected.stock > 0);
+  const selectVariant = (variant: ProductVariant) => {
+    setSelected(variant);
+    setQuantity(variant.moq);
+  };
+  const buyNow = () => {
+    add(selected.id, quantity);
+    navigate("/checkout");
+  };
   return (
-    <div className={s.detail}>
-      <div className={s.breadcrumb}>
-        首页 <ChevronRight /> {p.category} <ChevronRight /> {p.model}
-      </div>
+    <div className={s.detailPage}>
+      <div className={s.breadcrumb}>首页 <ChevronRight /> {family.category} <ChevronRight /> {family.model}</div>
       <section className={s.detailTop}>
-        <div className={s.gallery}>
-          <div className={s.mainImage}>
-            {p.tag && <span>{p.tag}</span>}
-            {toolIcon(p.color)}
-          </div>
-          <div className={s.thumbs}>
-            {[1, 2, 3, 4].map((n) => (
-              <button key={n}>{toolIcon(n % 2 ? p.color : "#8da0ac")}</button>
-            ))}
-          </div>
+        <div className={s.detailVisual}>
+          <ToolArt color={family.color} label={family.name} />
+          <small>当前为型号结构示意；请在卖家后台上传对应 SKU 实物图、尺寸图或 PDF。</small>
         </div>
-        <div className={s.info}>
-          <span className={s.productType}>{p.category} · 精密级</span>
-          <h1>{p.name}</h1>
-          <div className={s.modelRow}>
-            <b>{p.model}</b>
-            <button onClick={() => setLiked(!liked)} aria-pressed={liked}>
-              <Heart fill={liked ? "currentColor" : "none"} />{" "}
-              {liked ? "已收藏" : "收藏"}
-            </button>
+        <div className={s.detailInfo}>
+          <span className={s.productType}>{family.category} · {family.subcategory}</span>
+          <h1>{family.name}</h1>
+          <div className={s.modelLine}><b>{family.model}</b><span>{family.brand}</span></div>
+          <p className={s.detailLead}>{family.description}</p>
+          <div className={s.priceBox}><span>当前所选规格参考价</span><strong>{money(selected.price)}</strong><small>演示价格；正式成交价、税率与结款权限以卖家确认/系统规则为准</small></div>
+          <div className={s.deliveryLine}><Truck /><div><b>{delivery.text}</b><span>现货 {selected.stock} · 起订 {selected.moq} · {selected.packaging}</span></div></div>
+          <section className={s.variantSection}>
+            <div className={s.variantHead}><b>选择规格</b><span>型号相同，规格不同</span></div>
+            <div className={s.variantGrid}>
+              {family.variants.map((variant) => <button key={variant.id} className={selected.id === variant.id ? s.selected : ""} onClick={() => selectVariant(variant)}><strong>{variant.label}</strong><span>{variant.sku}</span><small>{money(variant.price)} · 库存 {variant.stock}</small></button>)}
+            </div>
+          </section>
+          <div className={s.purchaseRow}>
+            <div className={s.stepper}><button aria-label="减少数量" onClick={() => setQuantity((value) => Math.max(selected.moq, value - 1))}><Minus /></button><input aria-label="采购数量" type="number" min={selected.moq} value={quantity} onChange={(event) => setQuantity(Math.max(selected.moq, Number(event.target.value) || selected.moq))} /><button aria-label="增加数量" onClick={() => setQuantity((value) => value + 1)}><Plus /></button></div>
+            <button className={s.secondaryButton} onClick={() => add(selected.id, quantity)}><ShoppingCart /> 加入采购车</button>
+            <button className={s.primaryButton} onClick={buyNow}>立即下单 <ArrowRight /></button>
           </div>
-          <p className={s.lead}>
-            高稳定性精密切削刀具，适用于连续及断续加工。以下技术参数为原型演示数据，下单前请与工程师确认。
-          </p>
-          <div className={s.priceBox}>
-            <span>企业采购价</span>
-            <strong>{money(p.price, usd)}</strong>
-            <small>含税参考价 · 批量采购享阶梯优惠</small>
-          </div>
-          <dl className={s.keySpecs}>
-            <div>
-              <dt>库存状态</dt>
-              <dd className={s.green}>现货 {p.stock} 件</dd>
-            </div>
-            <div>
-              <dt>起订数量</dt>
-              <dd>{p.moq} 件</dd>
-            </div>
-            <div>
-              <dt>预计发货</dt>
-              <dd>付款后 1–3 个工作日</dd>
-            </div>
-            <div>
-              <dt>发货仓</dt>
-              <dd>华东中心仓</dd>
-            </div>
-          </dl>
-          <div className={s.option}>
-            <b>规格选择</b>
-            <div>
-              <button className={s.selected}>{p.size}</button>
-              <button>同系列其他规格</button>
-            </div>
-          </div>
-          <div className={s.buyRow}>
-            <div className={s.stepper}>
-              <button onClick={() => setQty(Math.max(p.moq, qty - 1))}>
-                <Minus />
-              </button>
-              <input
-                aria-label="采购数量"
-                type="number"
-                value={qty}
-                onChange={(e) => setQty(Math.max(p.moq, +e.target.value))}
-              />
-              <button onClick={() => setQty(qty + 1)}>
-                <Plus />
-              </button>
-            </div>
-            <button className={s.addCart} onClick={() => add(p.id, qty)}>
-              <ShoppingCart />
-              加入采购车
-            </button>
-            <Link className={s.quoteBtn} to={`/quote?product=${p.id}`}>
-              立即询价
-            </Link>
-          </div>
-          <div className={s.assurances}>
-            <span>
-              <ShieldCheck />
-              正品保障
-            </span>
-            <span>
-              <PackageCheck />
-              批次可追溯
-            </span>
-            <span>
-              <Headphones />
-              工程师支持
-            </span>
-          </div>
+          <div className={s.detailAssurances}><span><ShieldCheck /> 型号与规格二次核对</span><span><PackageCheck /> 下单后自动送货单</span><span><Headphones /> 人工技术支持</span></div>
         </div>
       </section>
-      <section className={s.specSection}>
-        <div className={s.tabs}>
-          {["规格参数", "应用说明", "交付与服务"].map((t) => (
-            <button
-              className={tab === t ? s.active : ""}
-              onClick={() => setTab(t)}
-              key={t}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-        {tab === "规格参数" ? (
-          <div className={s.specContent}>
-            <h2>技术规格参数</h2>
-            <div className={s.specGrid}>
-              {[
-                ["产品型号", p.model],
-                ["刀具材质", p.material],
-                ["涂层类型", p.coating],
-                ["主要规格", p.size],
-                ["精度等级", "精密级"],
-                ["适用材料", "ISO P / M / K"],
-                ["适用机床", "加工中心、数控铣床"],
-                ["包装规格", `${p.moq} 件/盒`],
-              ].map((x) => (
-                <div key={x[0]}>
-                  <b>{x[0]}</b>
-                  <span>{x[1]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className={s.specContent}>
-            <h2>{tab}</h2>
-            <p>
-              适合结构钢、不锈钢及铸铁的稳定加工。建议根据机床刚性、工件材料和冷却条件，由应用工程师确认切削参数。
-            </p>
-          </div>
-        )}
+      <section className={s.detailTabs}>
+        {["规格参数", "应用说明", "交付与送货单"].map((item) => <button key={item} className={tab === item ? s.active : ""} onClick={() => setTab(item)}>{item}</button>)}
       </section>
-      <section className={s.related}>
-        <div className={s.sectionHead}>
-          <div>
-            <span>RELATED PRODUCTS</span>
-            <h2>同系列推荐</h2>
-          </div>
-        </div>
-        <div className={s.productGrid}>
-          {products.slice(8, 12).map((x) => (
-            <ProductCard p={x} add={add} usd={usd} key={x.id} />
-          ))}
-        </div>
+      <section className={s.detailContent}>
+        {tab === "规格参数" && <div className={s.specTable}>{Object.entries({ "商品型号": family.model, "当前 SKU": selected.sku, "规格": selected.size, "材质": selected.material, "表面/涂层": selected.coating, "起订量": String(selected.moq), "库存": String(selected.stock), ...selected.specifications }).map(([key, value]) => <div key={key}><b>{key}</b><span>{value}</span></div>)}</div>}
+        {tab === "应用说明" && <div className={s.richText}><h2>适用说明</h2><p>{family.application}</p><p>型号匹配、刀片/刀柄兼容性及实际切削参数需由现场工程师按工件材料、机床刚性、冷却和工艺要求确认。</p></div>}
+        {tab === "交付与送货单" && <div className={s.richText}><h2>订单后自动生成送货单</h2><p>提交订单后，系统自动生成固定模板送货单与 <b>XS 固定前缀流水号</b>，并锁定商品、规格、数量、税务、结款、收货及物流快照。</p><p>纸质单据请由卖家审核、打印并按业务要求加盖实体章；系统不生成电子印章。</p></div>}
       </section>
     </div>
   );
 }
 
-function Cart({
-  cart,
-  setCart,
-  usd,
-}: {
-  cart: Record<string, number>;
-  setCart: (v: Record<string, number>) => void;
-  usd: boolean;
-}) {
-  const items = Object.entries(cart).map(([id, q]) => ({
-    p: getProduct(id),
-    q,
-  }));
-  const update = (id: string, q: number) => {
-    const n = { ...cart };
-    q <= 0 ? delete n[id] : (n[id] = q);
-    setCart(n);
-    localStorage.setItem("pt-cart", JSON.stringify(n));
-  };
-  const total = items.reduce((n, x) => n + x.p.price * x.q, 0);
+function CartPage({ items, updateCart, add }: { items: Array<{ product: Product; quantity: number }>; updateCart: (id: string, quantity: number) => void; add: (id: string, quantity?: number) => void }) {
+  const total = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
   return (
     <div className={s.page}>
-      <div className={s.pageTitle}>
-        <div>
-          <span>PURCHASE CART</span>
-          <h1>采购车</h1>
-        </div>
-        <small>{items.length} 种商品</small>
-      </div>
-      {items.length ? (
-        <div className={s.cartLayout}>
-          <section className={s.cartPanel}>
-            {items.map(({ p, q }) => (
-              <div className={s.cartItem} key={p.id}>
-                <div className={s.cartPic}>{toolIcon(p.color)}</div>
-                <div className={s.cartDesc}>
-                  <Link to={`/product/${p.id}`}>
-                    <b>{p.name}</b>
-                    <strong>{p.model}</strong>
-                  </Link>
-                  <span>
-                    {p.size} · {p.material} · {p.coating}
-                  </span>
-                  <small>
-                    起订量 {p.moq} 件 · 库存 {p.stock} 件
-                  </small>
-                </div>
-                <div className={s.stepper}>
-                  <button onClick={() => update(p.id, q - 1)}>
-                    <Minus />
-                  </button>
-                  <input
-                    value={q}
-                    onChange={(e) => update(p.id, +e.target.value)}
-                  />
-                  <button onClick={() => update(p.id, q + 1)}>
-                    <Plus />
-                  </button>
-                </div>
-                <strong>{money(p.price * q, usd)}</strong>
-                <button
-                  className={s.delete}
-                  onClick={() => update(p.id, 0)}
-                  aria-label="删除商品"
-                >
-                  <Trash2 />
-                </button>
-              </div>
-            ))}
-          </section>
-          <aside className={s.summary}>
-            <h2>采购汇总</h2>
-            <div>
-              <span>商品种类</span>
-              <b>{items.length} 种</b>
-            </div>
-            <div>
-              <span>商品数量</span>
-              <b>{items.reduce((n, x) => n + x.q, 0)} 件</b>
-            </div>
-            <div className={s.total}>
-              <span>参考合计</span>
-              <strong>{money(total, usd)}</strong>
-            </div>
-            <p>最终价格、税费及交期以正式报价单为准</p>
-            <Link className={s.primary} to="/quote">
-              去提交询价 <ChevronRight />
-            </Link>
-          </aside>
-        </div>
-      ) : (
-        <div className={s.empty}>
-          <ShoppingCart />
-          <h2>采购车还是空的</h2>
-          <p>添加常用刀具，统一询价更高效</p>
-          <Link to="/products">去选购刀具</Link>
-        </div>
-      )}
+      <PageTitle eyebrow="PURCHASE CART" title="采购车" note={items.length + " 个规格已加入"} />
+      {items.length ? <div className={s.cartLayout}>
+        <section className={s.cartPanel}>
+          {items.map(({ product, quantity }) => <div className={s.cartItem} key={product.id}>
+            <ToolArt color={product.color} label={product.familyName} compact />
+            <div className={s.cartDescription}><Link to={"/product/" + product.familyId}><b>{product.familyName}</b><strong>{product.model} · {product.sku}</strong></Link><span>{product.label} · {product.size}</span><small>起订 {product.moq} · 现货 {product.stock} · {product.packaging}</small></div>
+            <div className={s.stepper}><button aria-label="减少数量" onClick={() => updateCart(product.id, Math.max(product.moq, quantity - 1))}><Minus /></button><input aria-label="数量" value={quantity} onChange={(event) => updateCart(product.id, Math.max(product.moq, Number(event.target.value) || product.moq))} /><button aria-label="增加数量" onClick={() => add(product.id, 1)}><Plus /></button></div>
+            <strong>{money(product.price * quantity)}</strong>
+            <button className={s.textDanger} aria-label="删除商品" onClick={() => updateCart(product.id, 0)}><X /></button>
+          </div>)}
+        </section>
+        <aside className={s.summary}>
+          <h2>订单汇总</h2><div><span>型号规格</span><b>{items.length} 项</b></div><div><span>采购数量</span><b>{items.reduce((sum, item) => sum + item.quantity, 0)} 件</b></div><div className={s.total}><span>商品合计</span><strong>{money(total)}</strong></div><p>结算方式、税务状态和物流将在确认订单时选择，并会写入自动生成的送货单。</p><Link className={s.primary} to="/checkout">去结算 <ChevronRight /></Link>
+        </aside>
+      </div> : <Empty icon={<ShoppingCart />} title="采购车还是空的" description="先按型号和规格选择需要的刀具，再提交订单。" action={<Link to="/products">进入型号中心</Link>} />}
     </div>
   );
 }
 
-function Quote({ cart }: { cart: Record<string, number> }) {
-  const [done, setDone] = useState(false);
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setDone(true);
+function Checkout({ items, orders, onOrder }: { items: Array<{ product: Product; quantity: number }>; orders: Order[]; onOrder: (order: Order) => void }) {
+  const navigate = useNavigate();
+  const [taxMode, setTaxMode] = useState<TaxMode>("含税");
+  const [settlement, setSettlement] = useState<Settlement>("现金");
+  const [logistics, setLogistics] = useState("顺丰快递");
+  const [error, setError] = useState("");
+  const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  if (!items.length) return <Navigate replace to="/cart" />;
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const company = String(data.get("company") || "").trim();
+    const contact = String(data.get("contact") || "").trim();
+    const phone = String(data.get("phone") || "").trim();
+    const address = String(data.get("address") || "").trim();
+    if (!company || !contact || !phone || !address) {
+      setError("请完整填写企业、联系人、联系电话与收货地址。");
+      return;
+    }
+    const now = new Date();
+    const promise = shippingPromise(now, items.every((item) => item.product.stock >= item.quantity));
+    const taxRate = taxMode === "含税" ? 13 : 0;
+    const created: Order = {
+      id: createClientOrderId(),
+      orderNo: orderNo(orders.length),
+      deliveryNo: nextDeliveryNo(),
+      createdAt: now.toISOString(),
+      expectedShipDate: promise.date,
+      expectedShipText: promise.text,
+      status: "待卖家审核",
+      deliveryStatus: "已自动生成",
+      paymentStatus: settlement === "现金" ? "模拟待支付" : "待确认",
+      company,
+      contact,
+      phone,
+      address,
+      logistics,
+      taxMode,
+      taxRate,
+      settlement,
+      remark: String(data.get("remark") || "").trim(),
+      items: items.map(({ product, quantity }) => ({
+        familyId: product.familyId,
+        familyName: product.familyName,
+        model: product.model,
+        sku: product.sku,
+        spec: product.label + " · " + product.size,
+        quantity,
+        price: product.price,
+        total: product.price * quantity,
+        taxRate,
+      })),
+      total: subtotal,
+    };
+    onOrder(created);
+    navigate("/order-success/" + created.id);
   };
   return (
     <div className={s.page}>
-      <div className={s.pageTitle}>
-        <div>
-          <span>REQUEST FOR QUOTATION</span>
-          <h1>提交企业询价</h1>
+      <PageTitle eyebrow="DIRECT ORDER" title="确认订单" note="提交后自动生成固定送货单" />
+      <form className={s.checkoutLayout} onSubmit={submit}>
+        <div className={s.checkoutMain}>
+          <section className={s.formCard}><h2><span>01</span> 收货信息</h2><div className={s.formGrid}><label>企业名称 *<input name="company" required placeholder="请输入完整企业名称" /></label><label>联系人 *<input name="contact" required placeholder="姓名" /></label><label>联系电话 *<input name="phone" required type="tel" placeholder="手机或座机" /></label><label>物流方式 *<select value={logistics} onChange={(event) => setLogistics(event.target.value)}><option>顺丰快递</option><option>圆通快递</option><option>中通快递</option><option>同城跑腿</option><option>客户自提</option><option>其他物流</option></select></label><label className={s.full}>收货地址 *<input name="address" required placeholder="省 / 市 / 区 / 详细收货地址" /></label></div></section>
+          <section className={s.formCard}><h2><span>02</span> 结算与税务</h2><div className={s.optionRows}><label><b>税务状态</b><select value={taxMode} onChange={(event) => setTaxMode(event.target.value as TaxMode)}><option value="含税">含税（演示税率 13%）</option><option value="未税">未税</option></select><small>正式税率与价税计算规则须由卖家后台配置；当前为演示参数。</small></label><label><b>结算方式</b><select value={settlement} onChange={(event) => setSettlement(event.target.value as Settlement)}><option value="现金">现金 / 转账</option><option value="月结">月结（需卖家审批）</option><option value="当月结">当月结（需卖家审批）</option></select><small>月结不会自动生效，将进入卖家审核。</small></label></div></section>
+          <section className={s.formCard}><h2><span>03</span> 订单备注</h2><label><textarea name="remark" rows={4} placeholder="如有指定发票、送货、包装、收货时间等要求，请在此说明。" /></label></section>
+          {error && <p className={s.formError}>{error}</p>}
         </div>
-        <small>通常 24 小时内反馈</small>
-      </div>
-      {done ? (
-        <div className={s.success}>
-          <CheckCircle2 />
-          <h2>询价单提交成功</h2>
-          <p>演示编号 RFQ-20260721-0086，应用工程师将尽快联系您。</p>
-          <Link to="/">返回首页</Link>
-        </div>
-      ) : (
-        <form className={s.quoteForm} onSubmit={submit}>
-          <section>
-            <h2>
-              <span>01</span>企业与联系人
-            </h2>
-            <div className={s.formGrid}>
-              <label>
-                公司名称 *<input required placeholder="请输入完整公司名称" />
-              </label>
-              <label>
-                联系人 *<input required placeholder="姓名" />
-              </label>
-              <label>
-                联系电话 *
-                <input
-                  required
-                  type="tel"
-                  pattern="[0-9-]{7,}"
-                  placeholder="手机或座机"
-                />
-              </label>
-              <label>
-                电子邮箱
-                <input type="email" placeholder="用于接收报价单" />
-              </label>
-              <label className={s.full}>
-                收货地区 *
-                <input required placeholder="省 / 市 / 区 / 详细地址" />
-              </label>
-            </div>
-          </section>
-          <section>
-            <h2>
-              <span>02</span>采购需求
-            </h2>
-            <div className={s.rfqList}>
-              {Object.keys(cart).length ? (
-                Object.entries(cart).map(([id, q]) => (
-                  <div key={id}>
-                    <b>{getProduct(id).model}</b>
-                    <span>{getProduct(id).name}</span>
-                    <strong>{q} 件</strong>
-                  </div>
-                ))
-              ) : (
-                <div>
-                  <b>自定义刀具需求</b>
-                  <span>请在下方说明型号、尺寸与加工条件</span>
-                </div>
-              )}
-            </div>
-            <label>
-              需求说明
-              <textarea
-                rows={5}
-                placeholder="请描述加工材料、机床、尺寸、公差、预计用量或交期要求"
-              />
-            </label>
-          </section>
-          <section>
-            <h2>
-              <span>03</span>发票与贸易信息
-            </h2>
-            <div className={s.formGrid}>
-              <label>
-                发票类型
-                <select>
-                  <option>增值税专用发票</option>
-                  <option>增值税普通发票</option>
-                </select>
-              </label>
-              <label>
-                结算币种
-                <select>
-                  <option>人民币 CNY</option>
-                  <option>美元 USD（预留）</option>
-                </select>
-              </label>
-              <label className={s.full}>
-                国际物流信息（选填）
-                <input placeholder="Country / ZIP / Incoterms" />
-              </label>
-            </div>
-          </section>
-          <button className={s.submit} type="submit">
-            提交询价单
-          </button>
-        </form>
-      )}
+        <aside className={s.orderSummary}>
+          <h2>商品清单</h2>{items.map(({ product, quantity }) => <div className={s.orderLine} key={product.id}><span><b>{product.model}</b><small>{product.label} · {product.sku}</small></span><em>×{quantity}</em><strong>{money(product.price * quantity)}</strong></div>)}<div className={s.checkoutTotal}><span>应付参考总额</span><strong>{money(subtotal)}</strong><small>下单时生成送货单；实际结款、价格与库存由卖家最终审核。</small></div><div className={s.shipNotice}><CalendarCheck /><span><b>{shippingPromise(new Date()).text}</b>节假日和缺货规格以仓库确认结果为准。</span></div><button className={s.submitOrder} type="submit">提交订单并生成送货单 <ArrowRight /></button>
+        </aside>
+      </form>
     </div>
   );
 }
 
-function Account() {
-  return (
-    <div className={s.page}>
-      <div className={s.accountHero}>
-        <div className={s.avatar}>
-          <UserRound />
-        </div>
-        <div>
-          <small>企业采购账户</small>
-          <h1>下午好，采购负责人</h1>
-          <p>完成企业认证后可申请专属价格与账期</p>
-        </div>
-        <button>立即认证</button>
-      </div>
-      <div className={s.accountGrid}>
-        {[
-          [FileText, "我的询价单", "3 条处理中"],
-          [PackageCheck, "订单管理", "查看采购订单"],
-          [Heart, "我的收藏", "12 件刀具"],
-          [Clock3, "浏览记录", "最近查看"],
-          [MapPin, "地址管理", "2 个收货地址"],
-          [ShieldCheck, "企业资质", "待完善"],
-        ].map(([I, t, d]) => (
-          <Link to="#" key={t as string}>
-            <I />
-            <div>
-              <b>{t as string}</b>
-              <span>{d as string}</span>
-            </div>
-            <ChevronRight />
-          </Link>
-        ))}
-      </div>
-      <section className={s.contactCard}>
-        <div>
-          <span>TECHNICAL SUPPORT</span>
-          <h2>需要选型或工艺支持？</h2>
-          <p>提交加工材料、机床和目标参数，应用工程师将为您提供建议。</p>
-        </div>
-        <Link to="/quote">联系技术顾问</Link>
-      </section>
-    </div>
-  );
+function OrderSuccess({ orders, clearCart }: { orders: Order[]; clearCart: () => void }) {
+  const { id } = useParams();
+  const order = orders.find((item) => item.id === id);
+  const didClear = useRef(false);
+  useEffect(() => {
+    if (order && !didClear.current) {
+      didClear.current = true;
+      clearCart();
+    }
+  }, [clearCart, order]);
+  if (!order) return <NotFound />;
+  return <div className={s.page}><div className={s.successPanel}><CheckCircle2 /><span>ORDER CREATED</span><h1>订单已提交，送货单已自动生成</h1><p>订单 <b>{order.orderNo}</b> 已进入卖家审核；固定送货单编号为 <b>{order.deliveryNo}</b>。</p><div className={s.successFacts}><div><small>预计发货</small><b>{order.expectedShipText}</b></div><div><small>结算方式</small><b>{order.taxMode} · {order.settlement}</b></div><div><small>物流方式</small><b>{order.logistics}</b></div></div><div className={s.successActions}><Link className={s.primary} to={"/delivery/" + order.id}><ReceiptText /> 查看送货单</Link><Link className={s.secondary} to="/orders">进入订单中心</Link></div></div></div>;
 }
+
+function OrdersPage({ orders }: { orders: Order[] }) {
+  const [status, setStatus] = useState<"全部" | OrderStatus>("全部");
+  const filtered = orders.filter((order) => status === "全部" || order.status === status);
+  return <div className={s.page}><PageTitle eyebrow="ORDER CENTER" title="我的订单" note="订单提交后可查看固定送货单" /><div className={s.orderTabs}>{(["全部", "待卖家审核", "待支付", "已确认", "已发货", "已完成"] as const).map((item) => <button key={item} className={status === item ? s.active : ""} onClick={() => setStatus(item)}>{item}</button>)}</div>{filtered.length ? <div className={s.orderCards}>{filtered.map((order) => <OrderCard key={order.id} order={order} />)}</div> : <Empty icon={<ClipboardList />} title="还没有订单" description="选择型号和规格后提交订单，系统将自动生成送货单。" action={<Link to="/products">去选购</Link>} />}</div>;
+}
+
+function OrderCard({ order, seller = false, onUpdate }: { order: Order; seller?: boolean; onUpdate?: (next: Order) => void }) {
+  const statusClass = order.status === "已发货" || order.status === "已完成" ? s.successStatus : order.status === "已拒绝" ? s.dangerStatus : s.pendingStatus;
+  return <article className={s.orderCard}><div className={s.orderCardTop}><span>{seller ? order.company : "订单号：" + order.orderNo}</span><b className={statusClass}>{order.status}</b></div><div className={s.orderCardBody}><div><small>下单时间：{formatDateTime(order.createdAt)}</small><strong>{order.items[0].familyName} · {order.items[0].model}</strong><span>{order.items.map((item) => item.spec).join("；")}</span>{seller && <p>收货：{order.contact} · {order.phone}<br />{order.address}</p>}</div><div className={s.orderCardAmount}><small>{order.items.length} 项 · {order.taxMode} · {order.settlement}</small><b>{money(order.total)}</b></div></div><div className={s.orderCardFoot}><span><Truck /> {order.expectedShipText}</span><div><Link to={"/delivery/" + order.id}>送货单 {order.deliveryNo}</Link>{seller && order.status === "待卖家审核" && <button onClick={() => onUpdate?.({ ...order, status: "待支付", deliveryStatus: "待发货" })}>确认订单</button>}{seller && order.status === "待支付" && <button onClick={() => onUpdate?.({ ...order, status: "已确认", deliveryStatus: "待发货" })}>确认收款</button>}{seller && order.status === "已确认" && <button onClick={() => onUpdate?.({ ...order, status: "已发货", deliveryStatus: "已发货" })}>标记发货</button>}</div></div></article>;
+}
+
+function DeliveryNote({ orders }: { orders: Order[] }) {
+  const { id } = useParams();
+  const order = orders.find((item) => item.id === id);
+  if (!order) return <NotFound />;
+  const exportCsv = () => {
+    const headers = ["送货单号", "订单号", "客户", "型号", "SKU", "规格", "数量", "含税单价", "金额", "税率", "结算方式", "下单时间", "预计发货"];
+    const rows = order.items.map((item) => [order.deliveryNo, order.orderNo, order.company, item.model, item.sku, item.spec, String(item.quantity), item.price.toFixed(2), item.total.toFixed(2), String(item.taxRate) + "%", order.settlement, formatDateTime(order.createdAt), order.expectedShipDate]);
+    const content = [headers, ...rows].map((row) => row.map((value) => '"' + value.replaceAll('"', '""') + '"').join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = order.deliveryNo + "-送货单.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  return <div className={s.deliveryPage}><div className={s.deliveryActions}><Link to="/orders"><ChevronRight className={s.backIcon} /> 返回订单</Link><span>固定模板预览 · 打印前请卖家审核并加盖实体章</span><div><button onClick={exportCsv}><Download /> 导出 Excel（CSV）</button><button className={s.primaryButton} onClick={() => window.print()}><Printer /> 打印送货单</button></div></div><section className={s.deliverySheet}>
+    <div className={s.deliveryPerforation} aria-hidden="true" />
+    <header><div><small>电话：13902607662</small><small>客户：{order.company}</small><small>备注：{order.remark || "—"}</small></div><div className={s.deliveryTitle}><h1>东莞市杰帜数控刀具有限公司</h1><b>送货单</b></div><div><small>送货时间：{formatDateTime(order.createdAt)}</small><small>单号：<strong>{order.deliveryNo}</strong></small><small>关联订单：{order.orderNo}</small></div></header>
+    <div className={s.deliveryCustomer}><span>收货单位：<b>{order.company}</b></span><span>联系人：{order.contact}</span><span>联系电话：{order.phone}</span><span className={s.addressLine}>收货地址：{order.address}</span><span>物流：{order.logistics}</span><span>结算：{order.taxMode} · {order.settlement}</span></div>
+    <table><thead><tr><th>序号</th><th>商品</th><th>型号 / SKU</th><th>规格</th><th>数量</th><th>税率(%)</th><th>单价</th><th>金额</th><th>备注</th></tr></thead><tbody>{order.items.map((item, index) => <tr key={item.sku}><td>{index + 1}</td><td>{item.familyName}</td><td>{item.model}<br />{item.sku}</td><td>{item.spec}</td><td>{item.quantity}</td><td>{item.taxRate}</td><td>{item.price.toFixed(2)}</td><td>{item.total.toFixed(2)}</td><td>—</td></tr>)}{Array.from({ length: Math.max(0, 4 - order.items.length) }).map((_, index) => <tr className={s.blankRow} key={"blank-" + index}><td>{order.items.length + index + 1}</td><td /><td /><td /><td /><td /><td /><td /><td /></tr>)}</tbody><tfoot><tr><td colSpan={4}>合计</td><td>{order.items.reduce((sum, item) => sum + item.quantity, 0)}</td><td>—</td><td>—</td><td>{order.total.toFixed(2)}</td><td>人民币（含税/未税以订单为准）</td></tr></tfoot></table>
+    <footer><span>制单人：系统自动生成</span><span>审核人：________________</span><span>客户签字：________________</span><span>实际发货：{order.expectedShipDate}</span></footer>
+    <div className={s.stampNote}>打印后加盖实体章</div><div className={s.deliveryPerforation} aria-hidden="true" />
+  </section></div>;
+}
+
+function SellerConsole({ orders, onChangeOrders }: { orders: Order[]; onChangeOrders: React.Dispatch<React.SetStateAction<Order[]>> }) {
+  const [tab, setTab] = useState<"orders" | "delivery" | "products" | "customers" | "announcement" | "stats">("orders");
+  const update = (next: Order) => onChangeOrders((current) => current.map((item) => item.id === next.id ? next : item));
+  const current = shippingPromise(new Date());
+  const metrics = [{ label: "待审核订单", value: orders.filter((order) => order.status === "待卖家审核").length, icon: ClipboardCheck }, { label: "待发货", value: orders.filter((order) => order.deliveryStatus === "待发货").length, icon: Truck }, { label: "自动送货单", value: orders.length, icon: ReceiptText }, { label: "客户数", value: new Set(orders.map((order) => order.company)).size, icon: Users }];
+  return <div className={s.sellerPage}><aside className={s.sellerSide}><Link className={s.sellerBrand} to="/seller"><span>JZ</span><b>杰帜卖家中心</b></Link><button className={tab === "orders" ? s.active : ""} onClick={() => setTab("orders")}><ClipboardList /> 订单管理</button><button className={tab === "delivery" ? s.active : ""} onClick={() => setTab("delivery")}><Truck /> 送货单管理</button><button className={tab === "products" ? s.active : ""} onClick={() => setTab("products")}><Box /> 商品型号</button><button className={tab === "customers" ? s.active : ""} onClick={() => setTab("customers")}><Users /> 客户管理</button><button className={tab === "stats" ? s.active : ""} onClick={() => setTab("stats")}><BarChart3 /> 数据统计</button><button className={tab === "announcement" ? s.active : ""} onClick={() => setTab("announcement")}><FileText /> 公告管理</button><Link to="/"><Store /> 返回商城</Link></aside><section className={s.sellerContent}><div className={s.sellerTop}><div><span>SELLER WORKSPACE</span><h1>{tab === "orders" ? "订单管理" : tab === "delivery" ? "送货单管理" : tab === "products" ? "商品型号管理" : tab === "customers" ? "客户管理" : tab === "stats" ? "经营数据" : "公告管理"}</h1></div><Link to="/account"><UserRound /> 杰帜管理员</Link></div><div className={s.metricGrid}>{metrics.map(({ label, value, icon: Icon }) => <div key={label}><Icon /><span>{label}</span><b>{value}</b></div>)}</div>{tab === "orders" && <SellerOrders orders={orders} onUpdate={update} />}{tab === "delivery" && <SellerDelivery orders={orders} onUpdate={update} />}{tab === "products" && <SellerProducts />}{tab === "customers" && <SellerCustomers orders={orders} />}{tab === "stats" && <SellerStats orders={orders} />}{tab === "announcement" && <SellerAnnouncement current={current.text} />}</section></div>;
+}
+
+function SellerOrders({ orders, onUpdate }: { orders: Order[]; onUpdate: (next: Order) => void }) {
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>订单处理队列</h2><p>送货单在买家提交订单时已自动生成；卖家审核后再打印、盖章、发货。</p></div><Link to="/products"><Plus /> 新建手工订单</Link></div>{orders.length ? <div className={s.orderCards}>{orders.map((order) => <OrderCard key={order.id} seller order={order} onUpdate={onUpdate} />)}</div> : <Empty icon={<ClipboardList />} title="暂无待处理订单" description="前台用户提交订单后，将在这里显示完整收货、税务、结算和送货单信息。" />}</section>;
+}
+
+function SellerDelivery({ orders, onUpdate }: { orders: Order[]; onUpdate: (next: Order) => void }) {
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>固定模板送货单</h2><p>默认固定前缀为 XS，顺序编号从 XS348999 连续递增；可在真实后台配置前缀和流水规则。</p></div><Link to="/seller"><Cog /> 模板设置</Link></div>{orders.length ? <div className={s.deliveryList}>{orders.map((order) => <article key={order.id}><div><ReceiptText /><span><b>{order.deliveryNo}</b><small>关联订单：{order.orderNo} · {formatDateTime(order.createdAt)}</small></span></div><span>{order.company}</span><b>{order.deliveryStatus}</b><div><Link to={"/delivery/" + order.id}>预览/打印</Link>{order.deliveryStatus === "待发货" && <button onClick={() => onUpdate({ ...order, deliveryStatus: "已发货", status: "已发货" })}>确认发货</button>}</div></article>)}</div> : <Empty icon={<ReceiptText />} title="暂无送货单" description="订单提交成功后，系统会自动生成固定模板送货单。" />}</section>;
+}
+
+function SellerProducts() {
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>商品型号与规格</h2><p>大类 → 型号 → 规格 SKU。主夹、背夹是并列一级商品类目。</p></div><button><Upload /> 上传商品</button></div><div className={s.productAdminList}>{productFamilies.map((family) => <article key={family.id}><ToolArt compact color={family.color} label={family.name} /><div><b>{family.name}</b><span>{family.category} · 型号 {family.model}</span><small>{family.variants.length} 个规格 SKU · {family.variants.reduce((sum, item) => sum + item.stock, 0)} 件演示库存</small></div><Link to={"/product/" + family.id}>查看规格</Link></article>)}</div></section>;
+}
+
+function SellerCustomers({ orders }: { orders: Order[] }) {
+  const customers = Array.from(new Map(orders.map((order) => [order.company, order])).values());
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>客户信息</h2><p>订单成功提交后创建客户关联；真实上线应由权限与数据库控制访问。</p></div></div>{customers.length ? <div className={s.customerGrid}>{customers.map((customer) => <article key={customer.company}><Building2 /><b>{customer.company}</b><span>{customer.contact} · {customer.phone}</span><small>{customer.address}</small><Link to={"/delivery/" + customer.id}>最近送货单</Link></article>)}</div> : <Empty icon={<Users />} title="暂无客户数据" description="客户创建订单后会自动归集到这里。" />}</section>;
+}
+
+function SellerStats({ orders }: { orders: Order[] }) {
+  const total = orders.reduce((sum, order) => sum + order.total, 0);
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>经营数据（演示）</h2><p>数据直接由当前浏览器订单聚合；真实版本需从订单数据库与财务系统读取。</p></div></div><div className={s.analysisGrid}><div><span>订单金额</span><b>{money(total)}</b><small>当前浏览器演示数据</small></div><div><span>已发货</span><b>{orders.filter((order) => order.status === "已发货").length}</b><small>订单</small></div><div><span>平均订单</span><b>{orders.length ? money(total / orders.length) : "—"}</b><small>按订单金额计算</small></div></div></section>;
+}
+
+function SellerAnnouncement({ current }: { current: string }) {
+  const [content, setContent] = useState("现货规格 18:30 前下单当天发货；18:30 后下单次日发货。节假日和缺货规格以仓库确认结果为准。");
+  const [saved, setSaved] = useState(false);
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>商城公告</h2><p>当前系统公告计算结果：{current}</p></div></div><label className={s.announcementEditor}>公告内容<textarea rows={6} value={content} onChange={(event) => setContent(event.target.value)} /></label><button className={s.primaryButton} onClick={() => setSaved(true)}>{saved ? <><Check /> 已保存（演示）</> : "保存公告"}</button></section>;
+}
+
+function AccountHub({ orders }: { orders: Order[] }) {
+  return <div className={s.page}><section className={s.accountHero}><div className={s.accountAvatar}><UserRound /></div><div><span>企业采购账户</span><h1>订单、送货单与常购型号</h1><p>当前是前端可演示版本：订单数据保存在此浏览器。真实客户账户、权限和订单存储将在后端版本实现。</p></div><Link className={s.secondary} to="/seller"><LayoutDashboard /> 卖家入口</Link></section><div className={s.accountGrid}><Link to="/orders"><ClipboardList /><div><b>我的订单</b><span>{orders.length} 笔订单</span></div><ChevronRight /></Link><Link to="/orders"><ReceiptText /><div><b>送货单</b><span>订单后自动生成</span></div><ChevronRight /></Link><Link to="/batch-order"><Upload /><div><b>批量下单</b><span>粘贴型号与数量</span></div><ChevronRight /></Link><Link to="/tool-selector"><Sparkles /><div><b>选型助手</b><span>按工艺辅助推荐</span></div><ChevronRight /></Link><Link to="/account/addresses"><MapPin /><div><b>地址管理</b><span>真实版本支持常用地址</span></div><ChevronRight /></Link><Link to="/account/qualification"><ShieldCheck /><div><b>企业资质</b><span>月结权限待审核</span></div><ChevronRight /></Link></div><section className={s.contactCard}><div><span>MANUAL SUPPORT</span><h2>需要型号、规格或兼容性核对？</h2><p>与杰帜人工客服联系，确认刀片、主夹、背夹、刀柄与工艺的适配关系。</p></div><Link to="/support">查看联系方式</Link></section></div>;
+}
+
+function ToolSelector({ add }: { add: (id: string, quantity?: number) => void }) {
+  const [step, setStep] = useState(1);
+  const [process, setProcess] = useState("车削");
+  const [material, setMaterial] = useState("钢件（ISO P）");
+  const [precision, setPrecision] = useState("半精加工");
+  const recommended = process === "车削" ? [getFamily("pclnr"), getFamily("cnmg120408")] : [getFamily("em4f"), getFamily("dr5d")];
+  return <div className={s.page}><PageTitle eyebrow="TOOL SELECTOR" title="刀具选型助手" note="规则推荐，不替代现场工程师确认" /><div className={s.selectorShell}><aside>{["加工类型", "工件材料", "精度要求", "推荐结果"].map((label, index) => <button className={step === index + 1 ? s.active : ""} key={label} onClick={() => setStep(index + 1)}><b>0{index + 1}</b>{label}</button>)}</aside><section>{step === 1 && <SelectorOptions title="选择加工类型" options={["车削", "铣削"]} value={process} onChange={setProcess} onNext={() => setStep(2)} />}{step === 2 && <SelectorOptions title="选择工件材料" options={["钢件（ISO P）", "不锈钢（ISO M）", "铸铁（ISO K）", "铝合金（ISO N）"]} value={material} onChange={setMaterial} onNext={() => setStep(3)} />}{step === 3 && <SelectorOptions title="选择精度要求" options={["粗加工", "半精加工", "精加工"]} value={precision} onChange={setPrecision} onNext={() => setStep(4)} />}{step === 4 && <div className={s.selectorResult}><span>匹配依据：{process} · {material} · {precision}</span><h2>推荐先核对以下型号</h2>{recommended.map((family) => <article key={family.id}><ToolArt compact color={family.color} label={family.name} /><div><b>{family.model}</b><strong>{family.name}</strong><p>{family.application}</p></div><button onClick={() => add(family.variants[0].id, family.variants[0].moq)}>加入采购车</button><Link to={"/product/" + family.id}>查看规格</Link></article>)}<p className={s.selectorDisclaimer}>推荐使用公开的产品属性规则，不会凭空生成精确切削参数。实际型号与参数应由工程师按现场工况核验。</p></div>}</section></div></div>;
+}
+
+function SelectorOptions({ title, options, value, onChange, onNext }: { title: string; options: string[]; value: string; onChange: (value: string) => void; onNext: () => void }) {
+  return <div className={s.selectorOptions}><h2>{title}</h2><div>{options.map((option) => <button key={option} className={value === option ? s.selected : ""} onClick={() => onChange(option)}>{option}</button>)}</div><button className={s.primaryButton} onClick={onNext}>下一步 <ArrowRight /></button></div>;
+}
+
+function BatchOrder({ add }: { add: (id: string, quantity?: number) => void }) {
+  const [value, setValue] = useState("");
+  const [results, setResults] = useState<Array<{ product: Product; quantity: number }>>([]);
+  const parse = () => {
+    const parsed = value.split(/\n|,/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [code, rawQty] = line.split(/\s*[×x*]\s*/i);
+      const product = productFamilies.flatMap((family) => family.variants).map((variant) => getProduct(variant.id)).find((item) => item.sku.toLowerCase() === code.toLowerCase());
+      return product ? { product, quantity: Math.max(product.moq, Number(rawQty) || product.moq) } : null;
+    }).filter((item): item is { product: Product; quantity: number } => Boolean(item));
+    setResults(parsed);
+  };
+  return <div className={s.page}><PageTitle eyebrow="BATCH PURCHASE" title="批量输入型号下单" note="支持一行一个 SKU，格式：PCLNR2525M12 × 2" /><div className={s.batchLayout}><section className={s.formCard}><h2>粘贴型号与数量</h2><textarea rows={10} value={value} onChange={(event) => setValue(event.target.value)} placeholder={"PCLNR2525M12 × 2\nCNMG120408-PM4325 × 50\nEM-4F-D10-75 × 10"} /><button className={s.primaryButton} onClick={parse}><Search /> 识别 SKU</button><p>当前演示仅识别已建立的 SKU；真实版本将支持 Excel 导入、错误行提示、客户料号映射和库存校验。</p></section><section className={s.batchResult}><h2>识别结果</h2>{results.length ? <>{results.map(({ product, quantity }) => <div key={product.id}><span><b>{product.sku}</b><small>{product.familyName} · {product.label}</small></span><strong>×{quantity}</strong><button onClick={() => add(product.id, quantity)}>加购</button></div>)}<Link className={s.primary} to="/cart">前往采购车 <ChevronRight /></Link></> : <Empty icon={<Upload />} title="等待识别型号" description="请输入系统已建立的 SKU 与数量。" />}</section></div></div>;
+}
+
+function PurchaseAnalysis({ orders }: { orders: Order[] }) {
+  const total = orders.reduce((sum, order) => sum + order.total, 0);
+  return <div className={s.page}><PageTitle eyebrow="PURCHASE ANALYSIS" title="采购分析" note="当前为本浏览器订单的演示汇总" /><div className={s.analysisGrid}><div><span>累计订单</span><b>{orders.length}</b><small>笔</small></div><div><span>累计采购额</span><b>{money(total)}</b><small>参考金额</small></div><div><span>常购型号</span><b>{new Set(orders.flatMap((order) => order.items.map((item) => item.model))).size}</b><small>个</small></div></div><section className={s.sellerCard}><h2>后续真实版本</h2><ul className={s.plainList}><li>按企业、时间、型号、供应商与结算方式统计；</li><li>导出真实订单与送货单数据；</li><li>接入 ERP/WMS 后展示真实库存、交期和采购频次。</li></ul></section></div>;
+}
+
+function SupportPage() {
+  return <div className={s.page}><PageTitle eyebrow="ENTERPRISE SERVICE" title="企业服务与人工支持" note="国内一期以人工客服和业务核对为主" /><div className={s.supportGrid}><article><Headphones /><h2>型号与规格核对</h2><p>下单前协助核对主夹、背夹、刀片、刀柄及加工对象的适配关系。</p><b>电话：13902607662</b></article><article><Truck /><h2>发货与物流</h2><p>18:30 前下单的现货规格预计当天发；之后预计次日发。</p><b>物流：顺丰 / 圆通 / 中通 / 自提</b></article><article><ReceiptText /><h2>送货单与结算</h2><p>订单自动生成固定模板送货单，卖家审核后可打印、导出和人工盖章。</p><b>单据前缀：XS</b></article></div></div>;
+}
+
+function AboutPage() {
+  return <div className={s.page}><PageTitle eyebrow="ABOUT JIEZHI" title="杰帜数控刀具" note="工业刀具 B2B 采购与订单管理原型" /><section className={s.aboutCard}><Building2 /><div><h2>面向型号化采购的工业刀具商城</h2><p>当前版本聚焦国内客户的型号搜索、规格选择、直接下单、送货单和卖家处理流程。商品图片、库存、售价、税率与切削参数必须在接入真实商品资料后更新。</p><p>网站使用的加工场景照片为公共领域素材，详情见项目素材来源清单。</p></div></section></div>;
+}
+
+function Announcement({ onClose }: { onClose: () => void }) {
+  return <div className={s.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="announcement-title"><section className={s.announcement}><button aria-label="关闭公告" onClick={onClose}><X /></button><span><Truck /> 发货公告</span><h2 id="announcement-title">当天发货截止时间：18:30</h2><p>现货规格在 <b>18:30 前</b> 完成下单，预计当天发货；<b>18:30 后</b> 下单，预计次日发货。缺货、预售与节假日以仓库确认结果为准。</p><div><Link className={s.primary} to="/products" onClick={onClose}>去选型号</Link><button className={s.secondaryButton} onClick={onClose}>我知道了</button></div></section></div>;
+}
+
+function PageTitle({ eyebrow, title, note }: { eyebrow: string; title: string; note: string }) {
+  return <div className={s.pageTitle}><div><span>{eyebrow}</span><h1>{title}</h1></div><small>{note}</small></div>;
+}
+
+function Empty({ icon, title, description, action }: { icon: React.ReactNode; title: string; description: string; action?: React.ReactNode }) {
+  return <div className={s.empty}>{icon}<h2>{title}</h2><p>{description}</p>{action}</div>;
+}
+
 function NotFound() {
-  return (
-    <div className={s.empty}>
-      <h1>404</h1>
-      <h2>页面不存在</h2>
-      <Link to="/">返回首页</Link>
-    </div>
-  );
+  return <div className={s.page}><Empty icon={<Menu />} title="页面不存在" description="请从型号中心、采购车或订单中心继续操作。" action={<Link to="/">返回首页</Link>} /></div>;
 }
+
 function Footer() {
-  return (
-    <footer className={s.footer}>
-      <div>
-        <Link className={s.brand} to="/">
-          <span className={s.mark}>PT</span>
-          <span>
-            <b>杰帜数控刀具</b>
-            <small>PRECISION TOOLS</small>
-          </span>
-        </Link>
-        <p>为制造企业提供可靠、高效的精密切削工具与应用服务。</p>
-      </div>
-      <div>
-        <b>产品中心</b>
-        <Link to="/products">车削刀具</Link>
-        <Link to="/products">铣削刀具</Link>
-        <Link to="/products">孔加工刀具</Link>
-      </div>
-      <div>
-        <b>企业服务</b>
-        <Link to="/quote">批量询价</Link>
-        <Link to="/account">资质认证</Link>
-        <Link to="/account">售后支持</Link>
-      </div>
-      <div>
-        <b>联系我们</b>
-        <span>400-860-8816</span>
-        <span>service@precision-demo.cn</span>
-        <span>周一至周六 8:30–18:00</span>
-      </div>
-      <small>© 2026 杰帜数控刀具 · 高保真交互原型（演示数据）</small>
-    </footer>
-  );
+  return <footer className={s.footer}><div className={s.footerMain}><div><Link className={s.brand} to="/"><span className={s.mark}>JZ</span><span><b>杰帜数控刀具</b><small>JIEZHI CNC TOOLS</small></span></Link><p>以型号、规格、订单与送货单为核心的工业刀具采购系统原型。</p></div><div><b>采购入口</b><Link to="/products">型号中心</Link><Link to="/products?category=主夹">主夹</Link><Link to="/products?category=背夹">背夹</Link></div><div><b>企业功能</b><Link to="/batch-order">批量下单</Link><Link to="/orders">订单中心</Link><Link to="/seller">卖家中心</Link></div><div><b>订单服务</b><span>18:30 前下单当天发</span><span>电话：13902607662</span><Link to="/support">人工技术支持</Link></div></div><small>商品、库存、价格、税率及规格参数当前均为演示数据；上线前须由杰帜商品主数据核验。CNC 场景图：美国国防部公共领域素材。</small></footer>;
 }
-function MobileNav({ count }: { count: number }) {
-  return (
-    <nav className={s.mobileNav}>
-      <Link to="/">首页</Link>
-      <Link to="/products">分类</Link>
-      <Link to="/cart">采购车 {count > 0 && <i>{count}</i>}</Link>
-      <Link to="/account">我的</Link>
-    </nav>
-  );
+
+function MobileNav({ cartCount }: { cartCount: number }) {
+  return <nav className={s.mobileNav}><Link to="/">首页</Link><Link to="/products">分类</Link><Link to="/tool-selector">选型</Link><Link to="/cart">采购车 {cartCount ? <i>{cartCount}</i> : null}</Link><Link to="/account">我的</Link></nav>;
 }
+
 export default App;

@@ -1,2 +1,5 @@
 asset_id,local_path,purpose,category,source_url,source_domain,source_title,original_filename,downloaded_at,copyright_status,replacement_required,notes
-A001,src/App.tsx#toolIcon,商品中性示意图,自制SVG,,,,,2026-07-21,project-owned,false,代码生成矢量图
+A001,src/App.tsx#ToolArt,商品规格示意图,自制SVG,,,,,2026-07-21,project-owned,false,用于没有可核验实物图的商品族；明确为规格示意，不得视为实拍。
+A002,src/assets/cnc-waterjet-public-domain.jpg,首页数控加工场景背景,行业实拍,https://commons.wikimedia.org/wiki/File:CNC_water_jet_cutter.jpg,commons.wikimedia.org,CNC water jet cutter.jpg,CNC water jet cutter.jpg,2026-07-29,Public Domain (U.S. Department of Defense),false,仅作加工场景图；页面已标明非具体SKU商品图。
+A003,src/assets/tungsten-carbide-inserts-cc-by-sa-4.jpg,可转位刀片分类卡片,行业实拍,https://commons.wikimedia.org/wiki/File:Tungsten_carbide_inserts.jpg,commons.wikimedia.org,Tungsten carbide inserts.jpg,Tungsten carbide inserts.jpg,2026-07-29,CC BY-SA 4.0 / Mauro Cateb,false,页面已标明行业实拍非SKU图；如裁剪或编辑需在来源说明中标明改动并保留作者和许可证链接。
+A004,src/assets/tool-holder-cc-by-sa-4.jpg,主夹/背夹分类卡片,行业实拍,https://commons.wikimedia.org/wiki/File:WerkzeughalterProfil.jpg,commons.wikimedia.org,WerkzeughalterProfil.jpg,WerkzeughalterProfil.jpg,2026-07-29,CC BY-SA 4.0 / Florian Schott,false,页面已标明行业实拍非SKU图；不可宣称为杰帜主夹/背夹的实物照片。

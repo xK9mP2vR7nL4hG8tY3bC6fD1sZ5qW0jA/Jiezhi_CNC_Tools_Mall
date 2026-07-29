@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   BarChart3,
+  Bell,
   Box,
   Building2,
   CalendarCheck,
@@ -18,11 +19,13 @@ import {
   FileText,
   Headphones,
   LayoutDashboard,
+  LogOut,
   MapPin,
   Menu,
   Minus,
   PackageCheck,
   Plus,
+  Phone,
   Printer,
   ReceiptText,
   Search,
@@ -42,6 +45,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
@@ -49,6 +53,13 @@ import {
 import cncWaterjet from "./assets/cnc-waterjet-public-domain.jpg";
 import carbideInsertsPhoto from "./assets/tungsten-carbide-inserts-cc-by-sa-4.jpg";
 import toolHolderPhoto from "./assets/tool-holder-cc-by-sa-4.jpg";
+import {
+  AccountRole,
+  createDemoSession,
+  DemoSession,
+  readDemoSession,
+  writeDemoSession,
+} from "./features/auth/session";
 import {
   categories,
   familyMinPrice,
@@ -80,8 +91,16 @@ type OrderItem = {
   taxRate: number;
 };
 
+type OrderEvent = {
+  action: string;
+  actorRole: AccountRole;
+  at: string;
+  note?: string;
+};
+
 type Order = {
   id: string;
+  buyerId: string;
   orderNo: string;
   deliveryNo: string;
   createdAt: string;
@@ -101,6 +120,7 @@ type Order = {
   remark: string;
   items: OrderItem[];
   total: number;
+  events: OrderEvent[];
 };
 
 const CART_KEY = "jz-cnc-cart-v2";
@@ -225,10 +245,12 @@ const ToolArt = ({
 );
 
 function App() {
+  const location = useLocation();
   const [cart, setCart] = useState<Cart>(() => readStored(CART_KEY, {}));
   const cartRef = useRef(cart);
   const [orders, setOrders] = useState<Order[]>(() => readStored(ORDER_KEY, []));
   const ordersRef = useRef(orders);
+  const [session, setSession] = useState<DemoSession | null>(() => readDemoSession());
   const [toast, setToast] = useState("");
   const [announcementOpen, setAnnouncementOpen] = useState(
     () => !localStorage.getItem(ANNOUNCEMENT_KEY),
@@ -262,6 +284,17 @@ function App() {
     setOrders(next);
   };
 
+  const signIn = (next: DemoSession) => {
+    writeDemoSession(next);
+    setSession(next);
+  };
+
+  const signOut = () => {
+    writeDemoSession(null);
+    setSession(null);
+    pushToast("已退出演示账号");
+  };
+
   const add = (productId: string, quantity?: number) => {
     const product = getProduct(productId);
     const amount = quantity || product.moq;
@@ -284,11 +317,15 @@ function App() {
     .map(([id, quantity]) => ({ product: getProduct(id), quantity }))
     .filter(({ product }) => product.id);
 
+  const isAuthScreen = location.pathname === "/login";
+  const isWorkspaceScreen = ["/account", "/orders", "/delivery", "/seller"].some((path) => location.pathname === path || location.pathname.startsWith(path + "/"));
+
   return (
-    <div className={s.app}>
-      <Header cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} />
+    <div className={cx(s.app, isAuthScreen && s.authOnly, isWorkspaceScreen && s.workspaceApp)}>
+      {!isAuthScreen && <Header cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} session={session} onLogout={signOut} />}
       <main id="main">
         <Routes>
+          <Route path="/login" element={<LoginPage key={location.search} session={session} onLogin={signIn} onToast={pushToast} />} />
           <Route path="/" element={<Home add={add} />} />
           <Route path="/products" element={<Catalog add={add} />} />
           <Route path="/search" element={<Catalog add={add} />} />
@@ -306,32 +343,35 @@ function App() {
           <Route
             path="/checkout"
             element={
-              <Checkout items={cartItems} orders={orders} onOrder={addOrder} />
+              <RequireRole session={session} role="buyer">
+                <Checkout items={cartItems} orders={orders} onOrder={addOrder} session={session} />
+              </RequireRole>
             }
           />
           <Route
             path="/order-success/:id"
-            element={<OrderSuccess orders={orders} clearCart={() => persistCart({})} />}
+            element={<RequireRole session={session} role="buyer"><OrderSuccess orders={orders} clearCart={() => persistCart({})} /></RequireRole>}
           />
-          <Route path="/orders" element={<OrdersPage orders={orders} />} />
-          <Route path="/delivery/:id" element={<DeliveryNote orders={orders} />} />
+          <Route path="/orders" element={<RequireRole session={session} role="buyer"><OrdersPage orders={orders} session={session} onChangeOrders={setOrders} /></RequireRole>} />
+          <Route path="/delivery/:id" element={<RequireRole session={session} role="buyer"><DeliveryNote orders={orders} session={session} /></RequireRole>} />
+          <Route path="/seller/delivery/:id" element={<RequireRole session={session} role="seller"><DeliveryNote orders={orders} session={session} sellerView /></RequireRole>} />
           <Route
             path="/seller/*"
-            element={<SellerConsole orders={orders} onChangeOrders={setOrders} />}
+            element={<RequireRole session={session} role="seller"><SellerConsole orders={orders} onChangeOrders={setOrders} session={session} /></RequireRole>}
           />
-          <Route path="/account/*" element={<AccountHub orders={orders} />} />
+          <Route path="/account/*" element={<RequireRole session={session} role="buyer"><AccountHub orders={orders} session={session} /></RequireRole>} />
           <Route path="/tool-selector" element={<ToolSelector add={add} />} />
           <Route path="/batch-order" element={<BatchOrder add={add} />} />
-          <Route path="/purchase-analysis" element={<PurchaseAnalysis orders={orders} />} />
+          <Route path="/purchase-analysis" element={<RequireRole session={session} role="buyer"><PurchaseAnalysis orders={orders} session={session} /></RequireRole>} />
           <Route path="/quote" element={<Navigate replace to="/checkout" />} />
           <Route path="/support" element={<SupportPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
-      <Footer />
-      <MobileNav cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} />
-      {announcementOpen && (
+      {!isAuthScreen && <Footer />}
+      {!isAuthScreen && <MobileNav cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} session={session} />}
+      {!isAuthScreen && announcementOpen && location.pathname === "/" && (
         <Announcement onClose={() => {
           localStorage.setItem(ANNOUNCEMENT_KEY, "1");
           setAnnouncementOpen(false);
@@ -346,7 +386,7 @@ function App() {
   );
 }
 
-function Header({ cartCount }: { cartCount: number }) {
+function Header({ cartCount, session, onLogout }: { cartCount: number; session: DemoSession | null; onLogout: () => void }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -384,9 +424,10 @@ function Header({ cartCount }: { cartCount: number }) {
           </form>
           <div className={s.actions}>
             <Link to="/tool-selector"><Sparkles /> 选型</Link>
-            <Link to="/orders"><ClipboardList /> 订单</Link>
-            <Link to="/account"><UserRound /> 我的</Link>
+            {session?.role === "seller" ? <Link to="/seller/orders"><ClipboardList /> 订单处理</Link> : <Link to="/orders"><ClipboardList /> 订单</Link>}
+            {session ? <Link to={session.role === "seller" ? "/seller" : "/account"}><UserRound /> {session.role === "seller" ? "卖家工作台" : "我的"}</Link> : <Link data-testid="header-login" to="/login"><UserRound /> 登录 / 注册</Link>}
             <Link className={s.cartLink} to="/cart"><ShoppingCart /> 采购车 <i>{cartCount}</i></Link>
+            {session && <button className={s.logoutButton} type="button" onClick={onLogout} aria-label="退出当前账号"><LogOut /> 退出</button>}
           </div>
         </div>
         <nav className={s.nav} aria-label="主导航">
@@ -395,12 +436,92 @@ function Header({ cartCount }: { cartCount: number }) {
           <Link to="/products?category=背夹">背夹</Link>
           <Link to="/products">型号分类</Link>
           <Link to="/batch-order">快速下单</Link>
-          <Link to="/seller">卖家中心</Link>
+          <Link to={session?.role === "seller" ? "/seller" : "/login?role=seller&returnTo=%2Fseller"}>卖家中心</Link>
           <Link to="/support">企业服务</Link>
         </nav>
       </header>
     </>
   );
+}
+
+function RequireRole({ session, role, children }: { session: DemoSession | null; role: AccountRole; children: React.ReactNode }) {
+  const location = useLocation();
+  if (!session || session.role !== role) {
+    const returnTo = encodeURIComponent(location.pathname + location.search);
+    return <Navigate replace to={`/login?role=${role}&returnTo=${returnTo}`} />;
+  }
+  return <>{children}</>;
+}
+
+function LoginPage({ session, onLogin, onToast }: { session: DemoSession | null; onLogin: (session: DemoSession) => void; onToast: (message: string) => void }) {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedRole = searchParams.get("role") === "seller" ? "seller" : "buyer";
+  const [role, setRole] = useState<AccountRole>(requestedRole);
+  const [codeSent, setCodeSent] = useState(false);
+  const [agreed, setAgreed] = useState(true);
+  const [error, setError] = useState("");
+  const returnTo = searchParams.get("returnTo");
+
+  const finishLogin = (company: string, phone: string) => {
+    const next = createDemoSession({ role, company, phone });
+    onLogin(next);
+    onToast(role === "seller" ? "已进入卖家工作台（演示账号）" : "已进入买家采购中心（演示账号）");
+    const target = returnTo?.startsWith("/") ? returnTo : role === "seller" ? "/seller" : "/account";
+    navigate(target, { replace: true });
+  };
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const company = String(data.get("company") || "").trim();
+    const phone = String(data.get("phone") || "").replace(/\s/g, "");
+    const code = String(data.get("code") || "").trim();
+    if (role === "seller" && !company) {
+      setError("请输入注册企业名称后再登录卖家工作台。");
+      return;
+    }
+    if (!/^1\d{10}$/.test(phone)) {
+      setError("请输入正确的 11 位手机号码。");
+      return;
+    }
+    if (code.length < 4) {
+      setError("请输入至少 4 位验证码；当前仅演示界面，不会发送真实短信。");
+      return;
+    }
+    if (!agreed) {
+      setError("请先阅读并同意《用户协议》和《隐私政策》。");
+      return;
+    }
+    finishLogin(company, phone);
+  };
+
+  const quickLogin = () => finishLogin(role === "seller" ? "东莞市杰帜数控刀具有限公司" : "精工机械制造有限公司", role === "seller" ? "13902607662" : "13812345678");
+
+  return <div className={s.authPage}>
+    <section className={s.authCard} aria-labelledby="login-title">
+      <div className={s.authMark}><Cog aria-hidden="true" /></div>
+      <h1 id="login-title">杰帜数控刀具</h1>
+      <p>数控精密刀具 · 企业采购服务</p>
+      <div className={s.roleTabs} role="tablist" aria-label="选择登录身份">
+        <button data-testid="login-buyer-tab" type="button" role="tab" aria-selected={role === "buyer"} className={role === "buyer" ? s.active : ""} onClick={() => setRole("buyer")}>我是买家</button>
+        <button data-testid="login-seller-tab" type="button" role="tab" aria-selected={role === "seller"} className={role === "seller" ? s.active : ""} onClick={() => setRole("seller")}>我是卖家</button>
+      </div>
+      {role === "seller" && <p className={s.sellerLoginNotice}><ShieldCheck aria-hidden="true" /> 卖家账号应由杰帜管理员开通；当前仅演示角色分流。</p>}
+      <form className={s.loginForm} onSubmit={submit} noValidate>
+        {role === "seller" && <label><span>注册企业名称</span><div><Building2 aria-hidden="true" /><input name="company" autoComplete="organization" placeholder="请输入注册企业全称" /></div></label>}
+        <label><span>手机号码</span><div><Phone aria-hidden="true" /><input name="phone" type="tel" autoComplete="tel" inputMode="numeric" placeholder="请输入手机号" /></div></label>
+        <label><span>验证码</span><div className={s.codeField}><span><ShieldCheck aria-hidden="true" /><input name="code" inputMode="numeric" autoComplete="one-time-code" placeholder="请输入验证码" /></span><button data-testid="send-demo-code" type="button" onClick={() => { setCodeSent(true); setError(""); }}>获取验证码</button></div></label>
+        {codeSent && <p className={s.codeHint} role="status">演示验证码已就绪：可输入任意 4 位数字继续。</p>}
+        {error && <p className={s.formError} role="alert">{error}</p>}
+        <button data-testid="login-submit" className={s.loginSubmit} type="submit">登录 / 注册</button>
+        <label className={s.agreement}><input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} /><span>我已阅读并同意《用户协议》和《隐私政策》</span></label>
+      </form>
+      <div className={s.authDivider}><span>其他方式</span></div>
+      <button className={s.wechatDemo} type="button" onClick={quickLogin}>演示快捷登录</button>
+      <small className={s.authHint}>当前为前端原型：不会发送短信、不会接入微信，也不创建真实账号。{session ? " 登录将切换当前演示身份。" : ""}</small>
+    </section>
+  </div>;
 }
 
 function Home({ add }: { add: (id: string, quantity?: number) => void }) {
@@ -649,7 +770,7 @@ function CartPage({ items, updateCart, add }: { items: Array<{ product: Product;
   );
 }
 
-function Checkout({ items, orders, onOrder }: { items: Array<{ product: Product; quantity: number }>; orders: Order[]; onOrder: (order: Order) => void }) {
+function Checkout({ items, orders, onOrder, session }: { items: Array<{ product: Product; quantity: number }>; orders: Order[]; onOrder: (order: Order) => void; session: DemoSession | null }) {
   const navigate = useNavigate();
   const [taxMode, setTaxMode] = useState<TaxMode>("含税");
   const [settlement, setSettlement] = useState<Settlement>("现金");
@@ -673,6 +794,7 @@ function Checkout({ items, orders, onOrder }: { items: Array<{ product: Product;
     const taxRate = taxMode === "含税" ? 13 : 0;
     const created: Order = {
       id: createClientOrderId(),
+      buyerId: session?.id || "buyer:guest",
       orderNo: orderNo(orders.length),
       deliveryNo: nextDeliveryNo(),
       createdAt: now.toISOString(),
@@ -702,6 +824,7 @@ function Checkout({ items, orders, onOrder }: { items: Array<{ product: Product;
         taxRate,
       })),
       total: subtotal,
+      events: [{ action: "买家提交订单", actorRole: "buyer", at: now.toISOString(), note: "系统已预生成送货单编号" }],
     };
     onOrder(created);
     navigate("/order-success/" + created.id);
@@ -711,7 +834,7 @@ function Checkout({ items, orders, onOrder }: { items: Array<{ product: Product;
       <PageTitle eyebrow="DIRECT ORDER" title="确认订单" note="提交后自动生成固定送货单" />
       <form className={s.checkoutLayout} onSubmit={submit}>
         <div className={s.checkoutMain}>
-          <section className={s.formCard}><h2><span>01</span> 收货信息</h2><div className={s.formGrid}><label>企业名称 *<input name="company" required placeholder="请输入完整企业名称" /></label><label>联系人 *<input name="contact" required placeholder="姓名" /></label><label>联系电话 *<input name="phone" required type="tel" placeholder="手机或座机" /></label><label>物流方式 *<select value={logistics} onChange={(event) => setLogistics(event.target.value)}><option>顺丰快递</option><option>圆通快递</option><option>中通快递</option><option>同城跑腿</option><option>客户自提</option><option>其他物流</option></select></label><label className={s.full}>收货地址 *<input name="address" required placeholder="省 / 市 / 区 / 详细收货地址" /></label></div></section>
+          <section className={s.formCard}><h2><span>01</span> 收货信息</h2><div className={s.formGrid}><label>企业名称 *<input name="company" required defaultValue={session?.company} placeholder="请输入完整企业名称" /></label><label>联系人 *<input name="contact" required defaultValue={session?.contact} placeholder="姓名" /></label><label>联系电话 *<input name="phone" required defaultValue={session?.phone} type="tel" placeholder="手机或座机" /></label><label>物流方式 *<select value={logistics} onChange={(event) => setLogistics(event.target.value)}><option>顺丰快递</option><option>圆通快递</option><option>中通快递</option><option>同城跑腿</option><option>客户自提</option><option>其他物流</option></select></label><label className={s.full}>收货地址 *<input name="address" required placeholder="省 / 市 / 区 / 详细收货地址" /></label></div></section>
           <section className={s.formCard}><h2><span>02</span> 结算与税务</h2><div className={s.optionRows}><label><b>税务状态</b><select value={taxMode} onChange={(event) => setTaxMode(event.target.value as TaxMode)}><option value="含税">含税（演示税率 13%）</option><option value="未税">未税</option></select><small>正式税率与价税计算规则须由卖家后台配置；当前为演示参数。</small></label><label><b>结算方式</b><select value={settlement} onChange={(event) => setSettlement(event.target.value as Settlement)}><option value="现金">现金 / 转账</option><option value="月结">月结（需卖家审批）</option><option value="当月结">当月结（需卖家审批）</option></select><small>月结不会自动生效，将进入卖家审核。</small></label></div></section>
           <section className={s.formCard}><h2><span>03</span> 订单备注</h2><label><textarea name="remark" rows={4} placeholder="如有指定发票、送货、包装、收货时间等要求，请在此说明。" /></label></section>
           {error && <p className={s.formError}>{error}</p>}
@@ -738,21 +861,40 @@ function OrderSuccess({ orders, clearCart }: { orders: Order[]; clearCart: () =>
   return <div className={s.page}><div className={s.successPanel}><CheckCircle2 /><span>ORDER CREATED</span><h1>订单已提交，送货单已自动生成</h1><p>订单 <b>{order.orderNo}</b> 已进入卖家审核；固定送货单编号为 <b>{order.deliveryNo}</b>。</p><div className={s.successFacts}><div><small>预计发货</small><b>{order.expectedShipText}</b></div><div><small>结算方式</small><b>{order.taxMode} · {order.settlement}</b></div><div><small>物流方式</small><b>{order.logistics}</b></div></div><div className={s.successActions}><Link className={s.primary} to={"/delivery/" + order.id}><ReceiptText /> 查看送货单</Link><Link className={s.secondary} to="/orders">进入订单中心</Link></div></div></div>;
 }
 
-function OrdersPage({ orders }: { orders: Order[] }) {
-  const [status, setStatus] = useState<"全部" | OrderStatus>("全部");
-  const filtered = orders.filter((order) => status === "全部" || order.status === status);
-  return <div className={s.page}><PageTitle eyebrow="ORDER CENTER" title="我的订单" note="订单提交后可查看固定送货单" /><div className={s.orderTabs}>{(["全部", "待卖家审核", "待支付", "已确认", "已发货", "已完成"] as const).map((item) => <button key={item} className={status === item ? s.active : ""} onClick={() => setStatus(item)}>{item}</button>)}</div>{filtered.length ? <div className={s.orderCards}>{filtered.map((order) => <OrderCard key={order.id} order={order} />)}</div> : <Empty icon={<ClipboardList />} title="还没有订单" description="选择型号和规格后提交订单，系统将自动生成送货单。" action={<Link to="/products">去选购</Link>} />}</div>;
+type BuyerOrderFilter = "全部" | "待审核" | "待发货" | "待收货" | "已完成";
+
+const buyerOrderState = (order: Order): Exclude<BuyerOrderFilter, "全部"> => {
+  if (order.status === "待卖家审核" || order.status === "已拒绝") return "待审核";
+  if (order.status === "已发货") return "待收货";
+  if (order.status === "已完成") return "已完成";
+  return "待发货";
+};
+
+function OrdersPage({ orders, session, onChangeOrders }: { orders: Order[]; session: DemoSession | null; onChangeOrders: React.Dispatch<React.SetStateAction<Order[]>> }) {
+  const [status, setStatus] = useState<BuyerOrderFilter>("全部");
+  const ownOrders = orders.filter((order) => !order.buyerId || order.buyerId === session?.id);
+  const filtered = ownOrders.filter((order) => status === "全部" || buyerOrderState(order) === status);
+  const confirmReceipt = (order: Order) => onChangeOrders((current) => current.map((item) => item.id === order.id ? withOrderEvent(order, { status: "已完成", deliveryStatus: "已签收" }, "买家确认收货", "buyer") : item));
+  return <div className={cx(s.page, s.buyerOrdersPage)}><PageTitle eyebrow="BUYER ORDER CENTER" title="我的订单" note="可查看审核状态、送货单和发货进度" /><div className={cx(s.orderTabs, s.buyerOrderTabs)}>{(["全部", "待审核", "待发货", "待收货", "已完成"] as const).map((item) => <button data-testid={`buyer-order-tab-${item}`} key={item} className={status === item ? s.active : ""} onClick={() => setStatus(item)}>{item}</button>)}</div>{filtered.length ? <div className={s.orderCards}>{filtered.map((order) => <OrderCard key={order.id} order={order} onBuyerReceipt={confirmReceipt} />)}</div> : <Empty icon={<ClipboardList />} title="还没有订单" description="登录后选择型号和规格并提交订单，系统会预生成送货单编号。" action={<Link to="/products">去选购</Link>} />}</div>;
 }
 
-function OrderCard({ order, seller = false, onUpdate }: { order: Order; seller?: boolean; onUpdate?: (next: Order) => void }) {
+const withOrderEvent = (order: Order, patch: Partial<Order>, action: string, actorRole: AccountRole, note?: string): Order => ({
+  ...order,
+  ...patch,
+  events: [...(order.events || []), { action, actorRole, at: new Date().toISOString(), note }],
+});
+
+function OrderCard({ order, seller = false, onUpdate, onReject, onGenerateDelivery, onBuyerReceipt }: { order: Order; seller?: boolean; onUpdate?: (next: Order) => void; onReject?: (order: Order) => void; onGenerateDelivery?: (order: Order) => void; onBuyerReceipt?: (order: Order) => void }) {
   const statusClass = order.status === "已发货" || order.status === "已完成" ? s.successStatus : order.status === "已拒绝" ? s.dangerStatus : s.pendingStatus;
-  return <article className={s.orderCard}><div className={s.orderCardTop}><span>{seller ? order.company : "订单号：" + order.orderNo}</span><b className={statusClass}>{order.status}</b></div><div className={s.orderCardBody}><div><small>下单时间：{formatDateTime(order.createdAt)}</small><strong>{order.items[0].familyName} · {order.items[0].model}</strong><span>{order.items.map((item) => item.spec).join("；")}</span>{seller && <p>收货：{order.contact} · {order.phone}<br />{order.address}</p>}</div><div className={s.orderCardAmount}><small>{order.items.length} 项 · {order.taxMode} · {order.settlement}</small><b>{money(order.total)}</b></div></div><div className={s.orderCardFoot}><span><Truck /> {order.expectedShipText}</span><div><Link to={"/delivery/" + order.id}>送货单 {order.deliveryNo}</Link>{seller && order.status === "待卖家审核" && <button onClick={() => onUpdate?.({ ...order, status: "待支付", deliveryStatus: "待发货" })}>确认订单</button>}{seller && order.status === "待支付" && <button onClick={() => onUpdate?.({ ...order, status: "已确认", deliveryStatus: "待发货" })}>确认收款</button>}{seller && order.status === "已确认" && <button onClick={() => onUpdate?.({ ...order, status: "已发货", deliveryStatus: "已发货" })}>标记发货</button>}</div></div></article>;
+  const statusText = seller ? order.status : buyerOrderState(order);
+  const deliveryPath = seller ? "/seller/delivery/" + order.id : "/delivery/" + order.id;
+  return <article className={s.orderCard}><div className={s.orderCardTop}><span>{seller ? order.company : "订单号：" + order.orderNo}</span><b className={statusClass}>{statusText}</b></div><div className={s.orderCardBody}><div><small>下单时间：{formatDateTime(order.createdAt)}</small><strong>{order.items[0].familyName} · {order.items[0].model}</strong><span>{order.items.map((item) => item.spec).join("；")}</span>{seller && <p>收货：{order.contact} · {order.phone}<br />{order.address}</p>}</div><div className={s.orderCardAmount}><small>{order.items.length} 项 · {order.taxMode} · {order.settlement}</small><b>{money(order.total)}</b></div></div><div className={s.orderCardFoot}><span><Truck /> {order.expectedShipText}</span><div><Link to={deliveryPath}>送货单 {order.deliveryNo}</Link>{!seller && order.status === "已发货" && <button data-testid="buyer-confirm-receipt" onClick={() => onBuyerReceipt?.(order)}>确认收货</button>}{!seller && order.status === "已完成" && <Link to="/products">再次购买</Link>}{seller && order.status === "待卖家审核" && <><button className={s.outlineDanger} data-testid="seller-reject-order" onClick={() => onReject?.(order)}>拒绝</button><button data-testid="seller-confirm-order" onClick={() => onUpdate?.(withOrderEvent(order, { status: "已确认", deliveryStatus: "已自动生成", paymentStatus: "待确认" }, "卖家确认订单", "seller"))}>确认订单</button></>}{seller && order.status === "待支付" && <button data-testid="seller-confirm-payment" onClick={() => onUpdate?.(withOrderEvent(order, { status: "已确认", deliveryStatus: "已自动生成", paymentStatus: "已模拟支付" }, "卖家确认款项", "seller"))}>确认收款</button>}{seller && order.status === "已确认" && order.deliveryStatus === "已自动生成" && <button data-testid="seller-generate-delivery" onClick={() => onGenerateDelivery?.(order)}>生成送货单</button>}{seller && order.status === "已确认" && order.deliveryStatus === "待发货" && <button data-testid="seller-ship-order" onClick={() => onUpdate?.(withOrderEvent(order, { status: "已发货", deliveryStatus: "已发货" }, "卖家确认发货", "seller"))}>发货</button>}</div></div></article>;
 }
 
-function DeliveryNote({ orders }: { orders: Order[] }) {
+function DeliveryNote({ orders, session, sellerView = false }: { orders: Order[]; session: DemoSession | null; sellerView?: boolean }) {
   const { id } = useParams();
   const order = orders.find((item) => item.id === id);
-  if (!order) return <NotFound />;
+  if (!order || (!sellerView && order.buyerId && order.buyerId !== session?.id)) return <NotFound />;
   const exportCsv = () => {
     const headers = ["送货单号", "订单号", "客户", "型号", "SKU", "规格", "数量", "含税单价", "金额", "税率", "结算方式", "下单时间", "预计发货"];
     const rows = order.items.map((item) => [order.deliveryNo, order.orderNo, order.company, item.model, item.sku, item.spec, String(item.quantity), item.price.toFixed(2), item.total.toFixed(2), String(item.taxRate) + "%", order.settlement, formatDateTime(order.createdAt), order.expectedShipDate]);
@@ -765,7 +907,7 @@ function DeliveryNote({ orders }: { orders: Order[] }) {
     link.click();
     URL.revokeObjectURL(url);
   };
-  return <div className={s.deliveryPage}><div className={s.deliveryActions}><Link to="/orders"><ChevronRight className={s.backIcon} /> 返回订单</Link><span>固定模板预览 · 打印前请卖家审核并加盖实体章</span><div><button onClick={exportCsv}><Download /> 导出 Excel（CSV）</button><button className={s.primaryButton} onClick={() => window.print()}><Printer /> 打印送货单</button></div></div><section className={s.deliverySheet}>
+  return <div className={s.deliveryPage}><div className={s.deliveryActions}><Link to={sellerView ? "/seller/deliveries" : "/orders"}><ChevronRight className={s.backIcon} /> {sellerView ? "返回送货单管理" : "返回订单"}</Link><span>固定模板预览 · 打印前请卖家审核并加盖实体章</span><div><button onClick={exportCsv}><Download /> 导出 Excel（CSV）</button><button className={s.primaryButton} onClick={() => window.print()}><Printer /> 打印送货单</button></div></div><section className={s.deliverySheet}>
     <div className={s.deliveryPerforation} aria-hidden="true" />
     <header><div><small>电话：13902607662</small><small>客户：{order.company}</small><small>备注：{order.remark || "—"}</small></div><div className={s.deliveryTitle}><h1>东莞市杰帜数控刀具有限公司</h1><b>送货单</b></div><div><small>送货时间：{formatDateTime(order.createdAt)}</small><small>单号：<strong>{order.deliveryNo}</strong></small><small>关联订单：{order.orderNo}</small></div></header>
     <div className={s.deliveryCustomer}><span>收货单位：<b>{order.company}</b></span><span>联系人：{order.contact}</span><span>联系电话：{order.phone}</span><span className={s.addressLine}>收货地址：{order.address}</span><span>物流：{order.logistics}</span><span>结算：{order.taxMode} · {order.settlement}</span></div>
@@ -775,20 +917,65 @@ function DeliveryNote({ orders }: { orders: Order[] }) {
   </section></div>;
 }
 
-function SellerConsole({ orders, onChangeOrders }: { orders: Order[]; onChangeOrders: React.Dispatch<React.SetStateAction<Order[]>> }) {
-  const [tab, setTab] = useState<"orders" | "delivery" | "products" | "customers" | "announcement" | "stats">("orders");
+type SellerTab = "dashboard" | "orders" | "deliveries" | "products" | "customers" | "stats" | "announcement";
+
+const sellerTabs: Array<{ id: SellerTab; label: string; icon: typeof LayoutDashboard }> = [
+  { id: "dashboard", label: "工作台", icon: LayoutDashboard },
+  { id: "orders", label: "订单管理", icon: ClipboardList },
+  { id: "deliveries", label: "送货单管理", icon: Truck },
+  { id: "products", label: "商品管理", icon: Box },
+  { id: "customers", label: "客户管理", icon: Users },
+  { id: "stats", label: "数据统计", icon: BarChart3 },
+  { id: "announcement", label: "公告管理", icon: FileText },
+];
+
+const sellerTitle: Record<SellerTab, string> = {
+  dashboard: "卖家中心",
+  orders: "订单管理",
+  deliveries: "送货单管理",
+  products: "商品型号管理",
+  customers: "客户管理",
+  stats: "经营数据",
+  announcement: "公告管理",
+};
+
+function SellerConsole({ orders, onChangeOrders, session }: { orders: Order[]; onChangeOrders: React.Dispatch<React.SetStateAction<Order[]>>; session: DemoSession | null }) {
+  const location = useLocation();
+  const pathSegment = location.pathname.split("/")[2] as SellerTab | undefined;
+  const tab: SellerTab = sellerTabs.some((item) => item.id === pathSegment) ? pathSegment as SellerTab : "dashboard";
   const update = (next: Order) => onChangeOrders((current) => current.map((item) => item.id === next.id ? next : item));
   const current = shippingPromise(new Date());
-  const metrics = [{ label: "待审核订单", value: orders.filter((order) => order.status === "待卖家审核").length, icon: ClipboardCheck }, { label: "待发货", value: orders.filter((order) => order.deliveryStatus === "待发货").length, icon: Truck }, { label: "自动送货单", value: orders.length, icon: ReceiptText }, { label: "客户数", value: new Set(orders.map((order) => order.company)).size, icon: Users }];
-  return <div className={s.sellerPage}><aside className={s.sellerSide}><Link className={s.sellerBrand} to="/seller"><span>JZ</span><b>杰帜卖家中心</b></Link><button className={tab === "orders" ? s.active : ""} onClick={() => setTab("orders")}><ClipboardList /> 订单管理</button><button className={tab === "delivery" ? s.active : ""} onClick={() => setTab("delivery")}><Truck /> 送货单管理</button><button className={tab === "products" ? s.active : ""} onClick={() => setTab("products")}><Box /> 商品型号</button><button className={tab === "customers" ? s.active : ""} onClick={() => setTab("customers")}><Users /> 客户管理</button><button className={tab === "stats" ? s.active : ""} onClick={() => setTab("stats")}><BarChart3 /> 数据统计</button><button className={tab === "announcement" ? s.active : ""} onClick={() => setTab("announcement")}><FileText /> 公告管理</button><Link to="/"><Store /> 返回商城</Link></aside><section className={s.sellerContent}><div className={s.sellerTop}><div><span>SELLER WORKSPACE</span><h1>{tab === "orders" ? "订单管理" : tab === "delivery" ? "送货单管理" : tab === "products" ? "商品型号管理" : tab === "customers" ? "客户管理" : tab === "stats" ? "经营数据" : "公告管理"}</h1></div><Link to="/account"><UserRound /> 杰帜管理员</Link></div><div className={s.metricGrid}>{metrics.map(({ label, value, icon: Icon }) => <div key={label}><Icon /><span>{label}</span><b>{value}</b></div>)}</div>{tab === "orders" && <SellerOrders orders={orders} onUpdate={update} />}{tab === "delivery" && <SellerDelivery orders={orders} onUpdate={update} />}{tab === "products" && <SellerProducts />}{tab === "customers" && <SellerCustomers orders={orders} />}{tab === "stats" && <SellerStats orders={orders} />}{tab === "announcement" && <SellerAnnouncement current={current.text} />}</section></div>;
+  const metrics = [{ label: "待审核订单", value: orders.filter((order) => order.status === "待卖家审核").length, icon: ClipboardCheck }, { label: "待发货", value: orders.filter((order) => order.deliveryStatus === "待发货").length, icon: Truck }, { label: "预生成送货单", value: orders.length, icon: ReceiptText }, { label: "客户数", value: new Set(orders.map((order) => order.company)).size, icon: Users }];
+  return <div className={s.sellerPage}><aside className={s.sellerSide}><Link className={s.sellerBrand} to="/seller"><span>JZ</span><b>杰帜卖家中心</b></Link>{sellerTabs.map(({ id, label, icon: Icon }) => <Link key={id} className={tab === id ? s.active : ""} to={id === "dashboard" ? "/seller" : "/seller/" + id}><Icon /> {label}</Link>)}<Link to="/"><Store /> 返回商城</Link></aside><section className={s.sellerContent}><div className={s.sellerTop}><div><span>SELLER WORKSPACE · 演示权限</span><h1>{sellerTitle[tab]}</h1></div><div className={s.sellerIdentity}><Bell aria-hidden="true" /><span>{session?.company || "杰帜卖家管理员"}</span></div></div>{tab !== "dashboard" && <div className={s.metricGrid}>{metrics.map(({ label, value, icon: Icon }) => <div key={label}><Icon /><span>{label}</span><b>{value}</b></div>)}</div>}{tab === "dashboard" && <SellerDashboard orders={orders} metrics={metrics} />}{tab === "orders" && <SellerOrders orders={orders} onUpdate={update} />}{tab === "deliveries" && <SellerDelivery orders={orders} onUpdate={update} />}{tab === "products" && <SellerProducts />}{tab === "customers" && <SellerCustomers orders={orders} />}{tab === "stats" && <SellerStats orders={orders} />}{tab === "announcement" && <SellerAnnouncement current={current.text} />}</section></div>;
+}
+
+function SellerDashboard({ orders, metrics }: { orders: Order[]; metrics: Array<{ label: string; value: number; icon: typeof ClipboardCheck }> }) {
+  const turnover = orders.reduce((sum, order) => sum + order.total, 0);
+  return <><section className={s.sellerHeroMetric}><div><span>SELLER CENTER</span><h2>今天，准备处理什么？</h2><p>审核订单、生成固定送货单、安排人工发货，并维护型号与规格库存。</p><div><Link to="/seller/orders">处理订单</Link><Link to="/seller/products">管理商品</Link></div></div><aside><b>{orders.length || 0}</b><span>当前订单</span><small>当前浏览器演示数据</small></aside></section><div className={s.sellerDashboardStats}><div><span>今日访客</span><b>128</b></div><div><span>本月订单</span><b>{orders.length || 15}</b></div><div><span>本月成交额</span><b>{turnover ? money(turnover) : "¥24.5k"}</b></div></div><section className={s.sellerActionGrid}>{[{ icon: Box, title: "商品管理", note: "型号、规格、库存", to: "/seller/products" }, { icon: ClipboardList, title: "订单管理", note: `${metrics[0].value} 笔待审核`, to: "/seller/orders" }, { icon: Users, title: "客户管理", note: "企业采购信息", to: "/seller/customers" }, { icon: BarChart3, title: "数据统计", note: "采购与成交趋势", to: "/seller/stats" }, { icon: ReceiptText, title: "送货单", note: "生成、打印、发货", to: "/seller/deliveries" }, { icon: FileText, title: "公告管理", note: "18:30 发货规则", to: "/seller/announcement" }].map(({ icon: Icon, title, note, to }) => <Link key={title} to={to}><Icon /><span><b>{title}</b><small>{note}</small></span><ChevronRight /></Link>)}</section><section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>在售型号（{productFamilies.length} 个演示型号）</h2><p>商品由“大类 → 型号 → 规格 SKU”管理，主夹和背夹是并列一级类目。</p></div><Link to="/seller/products"><Upload /> 上传新商品</Link></div><div className={s.sellerSkuList}>{productFamilies.slice(0, 3).map((family) => <article key={family.id}><ToolArt compact color={family.color} label={family.name} /><div><b>{family.model}</b><span>{family.name}</span><small>{family.category} · {family.variants.length} 个规格 SKU</small></div><em>在售</em><Link to={`/product/${family.id}`}>查看</Link></article>)}</div></section></>;
 }
 
 function SellerOrders({ orders, onUpdate }: { orders: Order[]; onUpdate: (next: Order) => void }) {
-  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>订单处理队列</h2><p>送货单在买家提交订单时已自动生成；卖家审核后再打印、盖章、发货。</p></div><Link to="/products"><Plus /> 新建手工订单</Link></div>{orders.length ? <div className={s.orderCards}>{orders.map((order) => <OrderCard key={order.id} seller order={order} onUpdate={onUpdate} />)}</div> : <Empty icon={<ClipboardList />} title="暂无待处理订单" description="前台用户提交订单后，将在这里显示完整收货、税务、结算和送货单信息。" />}</section>;
+  const [filter, setFilter] = useState<"全部" | "待处理" | "待发货" | "已发货" | "已完成">("全部");
+  const [deliveryTarget, setDeliveryTarget] = useState<Order | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<Order | null>(null);
+  const filtered = orders.filter((order) => filter === "全部" || filter === "待处理" && order.status === "待卖家审核" || filter === "待发货" && (order.deliveryStatus === "已自动生成" || order.deliveryStatus === "待发货") || filter === "已发货" && order.status === "已发货" || filter === "已完成" && order.status === "已完成");
+  const reject = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!rejectTarget) return;
+    const reason = String(new FormData(event.currentTarget).get("reason") || "库存或规格需要人工确认").trim();
+    onUpdate(withOrderEvent(rejectTarget, { status: "已拒绝" }, "卖家拒绝订单", "seller", reason));
+    setRejectTarget(null);
+  };
+  const generate = () => {
+    if (!deliveryTarget) return;
+    onUpdate(withOrderEvent(deliveryTarget, { deliveryStatus: "待发货" }, "卖家正式生成送货单", "seller", "已可预览、打印并安排发货"));
+    setDeliveryTarget(null);
+  };
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>订单处理队列</h2><p>买家提交订单时会预生成送货单编号；卖家确认订单后，再正式生成、打印并安排送货单发货。</p></div><Link to="/products"><Plus /> 新建手工订单</Link></div><div className={s.sellerOrderTabs}>{(["全部", "待处理", "待发货", "已发货", "已完成"] as const).map((item) => <button key={item} className={filter === item ? s.active : ""} onClick={() => setFilter(item)}>{item}</button>)}</div>{filtered.length ? <div className={s.orderCards}>{filtered.map((order) => <OrderCard key={order.id} seller order={order} onUpdate={onUpdate} onReject={setRejectTarget} onGenerateDelivery={setDeliveryTarget} />)}</div> : <Empty icon={<ClipboardList />} title="暂无匹配订单" description="切换处理状态，或等待买家提交新的订单。" />}{deliveryTarget && <div className={s.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="generate-delivery-title"><section className={s.confirmSheet}><ReceiptText /><h2 id="generate-delivery-title">确认生成送货单？</h2><p>将为订单 <b>{deliveryTarget.orderNo}</b> 确认固定送货单 <b>{deliveryTarget.deliveryNo}</b>，随后可打印单据并安排发货。</p><div><button type="button" className={s.secondaryButton} onClick={() => setDeliveryTarget(null)}>取消</button><button data-testid="confirm-generate-delivery" type="button" className={s.primaryButton} onClick={generate}>确认生成</button></div></section></div>}{rejectTarget && <div className={s.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="reject-order-title"><form className={s.confirmSheet} onSubmit={reject}><X aria-hidden="true" /><h2 id="reject-order-title">拒绝订单</h2><p>请写明原因，买家将能在订单中心看到本次处理结果。</p><label>处理说明<textarea name="reason" rows={3} placeholder="例如：规格需重新确认，暂不能安排发货" /></label><div><button type="button" className={s.secondaryButton} onClick={() => setRejectTarget(null)}>取消</button><button type="submit" className={s.dangerButton}>确认拒绝</button></div></form></div>}</section>;
 }
 
 function SellerDelivery({ orders, onUpdate }: { orders: Order[]; onUpdate: (next: Order) => void }) {
-  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>固定模板送货单</h2><p>默认固定前缀为 XS，顺序编号从 XS348999 连续递增；可在真实后台配置前缀和流水规则。</p></div><Link to="/seller"><Cog /> 模板设置</Link></div>{orders.length ? <div className={s.deliveryList}>{orders.map((order) => <article key={order.id}><div><ReceiptText /><span><b>{order.deliveryNo}</b><small>关联订单：{order.orderNo} · {formatDateTime(order.createdAt)}</small></span></div><span>{order.company}</span><b>{order.deliveryStatus}</b><div><Link to={"/delivery/" + order.id}>预览/打印</Link>{order.deliveryStatus === "待发货" && <button onClick={() => onUpdate({ ...order, deliveryStatus: "已发货", status: "已发货" })}>确认发货</button>}</div></article>)}</div> : <Empty icon={<ReceiptText />} title="暂无送货单" description="订单提交成功后，系统会自动生成固定模板送货单。" />}</section>;
+  return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>固定模板送货单</h2><p>默认固定前缀为 XS，顺序编号从 XS348999 连续递增；正式版本可在后台配置前缀和流水规则。</p></div><Link to="/seller/announcement"><Cog /> 模板与公告</Link></div>{orders.length ? <div className={s.deliveryList}>{orders.map((order) => <article key={order.id}><div><ReceiptText /><span><b>{order.deliveryNo}</b><small>关联订单：{order.orderNo} · {formatDateTime(order.createdAt)}</small></span></div><span>{order.company}</span><b>{order.deliveryStatus}</b><div><Link to={"/seller/delivery/" + order.id}>预览/打印</Link>{order.deliveryStatus === "待发货" && <button data-testid="seller-confirm-shipping" onClick={() => onUpdate(withOrderEvent(order, { deliveryStatus: "已发货", status: "已发货" }, "卖家确认发货", "seller"))}>确认发货</button>}</div></article>)}</div> : <Empty icon={<ReceiptText />} title="暂无送货单" description="买家提交订单后，系统会先预生成固定模板送货单编号。" />}</section>;
 }
 
 function SellerProducts() {
@@ -811,8 +998,17 @@ function SellerAnnouncement({ current }: { current: string }) {
   return <section className={s.sellerCard}><div className={s.sellerCardHead}><div><h2>商城公告</h2><p>当前系统公告计算结果：{current}</p></div></div><label className={s.announcementEditor}>公告内容<textarea rows={6} value={content} onChange={(event) => setContent(event.target.value)} /></label><button className={s.primaryButton} onClick={() => setSaved(true)}>{saved ? <><Check /> 已保存（演示）</> : "保存公告"}</button></section>;
 }
 
-function AccountHub({ orders }: { orders: Order[] }) {
-  return <div className={s.page}><section className={s.accountHero}><div className={s.accountAvatar}><UserRound /></div><div><span>企业采购账户</span><h1>订单、送货单与常购型号</h1><p>当前是前端可演示版本：订单数据保存在此浏览器。真实客户账户、权限和订单存储将在后端版本实现。</p></div><Link className={s.secondary} to="/seller"><LayoutDashboard /> 卖家入口</Link></section><div className={s.accountGrid}><Link to="/orders"><ClipboardList /><div><b>我的订单</b><span>{orders.length} 笔订单</span></div><ChevronRight /></Link><Link to="/orders"><ReceiptText /><div><b>送货单</b><span>订单后自动生成</span></div><ChevronRight /></Link><Link to="/batch-order"><Upload /><div><b>批量下单</b><span>粘贴型号与数量</span></div><ChevronRight /></Link><Link to="/tool-selector"><Sparkles /><div><b>选型助手</b><span>按工艺辅助推荐</span></div><ChevronRight /></Link><Link to="/account/addresses"><MapPin /><div><b>地址管理</b><span>真实版本支持常用地址</span></div><ChevronRight /></Link><Link to="/account/qualification"><ShieldCheck /><div><b>企业资质</b><span>月结权限待审核</span></div><ChevronRight /></Link></div><section className={s.contactCard}><div><span>MANUAL SUPPORT</span><h2>需要型号、规格或兼容性核对？</h2><p>与杰帜人工客服联系，确认刀片、主夹、背夹、刀柄与工艺的适配关系。</p></div><Link to="/support">查看联系方式</Link></section></div>;
+function AccountHub({ orders, session }: { orders: Order[]; session: DemoSession | null }) {
+  const ownOrders = orders.filter((order) => !order.buyerId || order.buyerId === session?.id);
+  const total = ownOrders.reduce((sum, order) => sum + order.total, 0);
+  const statusItems = [
+    { label: "待审核", value: ownOrders.filter((order) => buyerOrderState(order) === "待审核").length, icon: ClipboardCheck },
+    { label: "待发货", value: ownOrders.filter((order) => buyerOrderState(order) === "待发货").length, icon: Truck },
+    { label: "待收货", value: ownOrders.filter((order) => buyerOrderState(order) === "待收货").length, icon: PackageCheck },
+    { label: "待付款", value: ownOrders.filter((order) => order.paymentStatus === "模拟待支付").length, icon: ReceiptText },
+    { label: "已完成", value: ownOrders.filter((order) => buyerOrderState(order) === "已完成").length, icon: CheckCircle2 },
+  ];
+  return <div className={cx(s.page, s.buyerAccountPage)}><section className={s.buyerProfile}><div className={s.buyerProfileTop}><div className={s.accountAvatar}><UserRound /></div><div><span>企业采购账户 · 演示身份</span><h1>{session?.company || "企业采购账号"}</h1><p>{session?.phone || "—"} · 登录后可管理订单、地址和常购型号</p></div><Link to="/login" className={s.buyerSwitch}>切换账号</Link></div><div className={s.buyerSpend}><span>本月采购金额</span><b>{total ? money(total) : "¥0.00"}</b><small>仅统计当前演示账号的浏览器订单</small></div></section><div className={s.buyerStatusGrid}>{statusItems.map(({ label, value, icon: Icon }) => <Link key={label} to="/orders"><span><Icon /><i>{value}</i></span><b>{label}</b></Link>)}</div><section className={s.buyerQuickSection}><h2>企业工具箱</h2><div className={s.buyerQuickGrid}><Link to="/orders"><ClipboardList /><span><b>我的订单</b><small>{ownOrders.length} 笔订单</small></span><ChevronRight /></Link><Link to="/orders"><ReceiptText /><span><b>送货单</b><small>查看与打印单据</small></span><ChevronRight /></Link><Link to="/account/addresses"><MapPin /><span><b>收货地址</b><small>常用地址（演示）</small></span><ChevronRight /></Link><Link to="/batch-order"><Upload /><span><b>批量下单</b><small>粘贴型号与数量</small></span><ChevronRight /></Link><Link to="/tool-selector"><Sparkles /><span><b>刀具选型助手</b><small>按工艺辅助推荐</small></span><ChevronRight /></Link><Link to="/purchase-analysis"><BarChart3 /><span><b>采购分析</b><small>当前账号采购汇总</small></span><ChevronRight /></Link></div></section><section className={s.buyerSellerEntry}><Store /><div><b>卖家服务</b><span>商品发布、订单管理与送货单处理需使用卖家账号。</span></div><Link to="/login?role=seller&returnTo=%2Fseller">卖家登录</Link></section><section className={s.contactCard}><div><span>MANUAL SUPPORT</span><h2>需要型号、规格或兼容性核对？</h2><p>与杰帜人工客服联系，确认刀片、主夹、背夹、刀柄与工艺的适配关系。</p></div><Link to="/support">查看联系方式</Link></section></div>;
 }
 
 function ToolSelector({ add }: { add: (id: string, quantity?: number) => void }) {
@@ -842,9 +1038,10 @@ function BatchOrder({ add }: { add: (id: string, quantity?: number) => void }) {
   return <div className={s.page}><PageTitle eyebrow="BATCH PURCHASE" title="批量输入型号下单" note="支持一行一个 SKU，格式：PCLNR2525M12 × 2" /><div className={s.batchLayout}><section className={s.formCard}><h2>粘贴型号与数量</h2><textarea rows={10} value={value} onChange={(event) => setValue(event.target.value)} placeholder={"PCLNR2525M12 × 2\nCNMG120408-PM4325 × 50\nEM-4F-D10-75 × 10"} /><button className={s.primaryButton} onClick={parse}><Search /> 识别 SKU</button><p>当前演示仅识别已建立的 SKU；真实版本将支持 Excel 导入、错误行提示、客户料号映射和库存校验。</p></section><section className={s.batchResult}><h2>识别结果</h2>{results.length ? <>{results.map(({ product, quantity }) => <div key={product.id}><span><b>{product.sku}</b><small>{product.familyName} · {product.label}</small></span><strong>×{quantity}</strong><button onClick={() => add(product.id, quantity)}>加购</button></div>)}<Link className={s.primary} to="/cart">前往采购车 <ChevronRight /></Link></> : <Empty icon={<Upload />} title="等待识别型号" description="请输入系统已建立的 SKU 与数量。" />}</section></div></div>;
 }
 
-function PurchaseAnalysis({ orders }: { orders: Order[] }) {
-  const total = orders.reduce((sum, order) => sum + order.total, 0);
-  return <div className={s.page}><PageTitle eyebrow="PURCHASE ANALYSIS" title="采购分析" note="当前为本浏览器订单的演示汇总" /><div className={s.analysisGrid}><div><span>累计订单</span><b>{orders.length}</b><small>笔</small></div><div><span>累计采购额</span><b>{money(total)}</b><small>参考金额</small></div><div><span>常购型号</span><b>{new Set(orders.flatMap((order) => order.items.map((item) => item.model))).size}</b><small>个</small></div></div><section className={s.sellerCard}><h2>后续真实版本</h2><ul className={s.plainList}><li>按企业、时间、型号、供应商与结算方式统计；</li><li>导出真实订单与送货单数据；</li><li>接入 ERP/WMS 后展示真实库存、交期和采购频次。</li></ul></section></div>;
+function PurchaseAnalysis({ orders, session }: { orders: Order[]; session: DemoSession | null }) {
+  const ownOrders = orders.filter((order) => !order.buyerId || order.buyerId === session?.id);
+  const total = ownOrders.reduce((sum, order) => sum + order.total, 0);
+  return <div className={s.page}><PageTitle eyebrow="PURCHASE ANALYSIS" title="采购分析" note="当前为本演示账号的浏览器订单汇总" /><div className={s.analysisGrid}><div><span>累计订单</span><b>{ownOrders.length}</b><small>笔</small></div><div><span>累计采购额</span><b>{money(total)}</b><small>参考金额</small></div><div><span>常购型号</span><b>{new Set(ownOrders.flatMap((order) => order.items.map((item) => item.model))).size}</b><small>个</small></div></div><section className={s.sellerCard}><h2>后续真实版本</h2><ul className={s.plainList}><li>按企业、时间、型号、供应商与结算方式统计；</li><li>导出真实订单与送货单数据；</li><li>接入 ERP/WMS 后展示真实库存、交期和采购频次。</li></ul></section></div>;
 }
 
 function SupportPage() {
@@ -875,8 +1072,11 @@ function Footer() {
   return <footer className={s.footer}><div className={s.footerMain}><div><Link className={s.brand} to="/"><span className={s.mark}>JZ</span><span><b>杰帜数控刀具</b><small>JIEZHI CNC TOOLS</small></span></Link><p>以型号、规格、订单与送货单为核心的工业刀具采购系统原型。</p></div><div><b>采购入口</b><Link to="/products">型号中心</Link><Link to="/products?category=主夹">主夹</Link><Link to="/products?category=背夹">背夹</Link></div><div><b>企业功能</b><Link to="/batch-order">批量下单</Link><Link to="/orders">订单中心</Link><Link to="/seller">卖家中心</Link></div><div><b>订单服务</b><span>18:30 前下单当天发</span><span>电话：13902607662</span><Link to="/support">人工技术支持</Link></div></div><small>商品、库存、价格、税率及规格参数当前均为演示数据；上线前须由杰帜商品主数据核验。CNC 场景图：美国国防部公共领域素材。</small></footer>;
 }
 
-function MobileNav({ cartCount }: { cartCount: number }) {
-  return <nav className={s.mobileNav}><Link to="/">首页</Link><Link to="/products">分类</Link><Link to="/tool-selector">选型</Link><Link to="/cart">采购车 {cartCount ? <i>{cartCount}</i> : null}</Link><Link to="/account">我的</Link></nav>;
+function MobileNav({ cartCount, session }: { cartCount: number; session: DemoSession | null }) {
+  if (session?.role === "seller") {
+    return <nav className={s.mobileNav} aria-label="卖家底部导航"><Link to="/seller"><LayoutDashboard /><span>工作台</span></Link><Link to="/seller/orders"><ClipboardList /><span>订单</span></Link><Link to="/seller/products"><Box /><span>商品</span></Link><Link to="/seller/deliveries"><ReceiptText /><span>送货单</span></Link><Link to="/login"><UserRound /><span>我的</span></Link></nav>;
+  }
+  return <nav className={s.mobileNav} aria-label="买家底部导航"><Link to="/"><Store /><span>首页</span></Link><Link to="/products"><Box /><span>分类</span></Link><Link to="/tool-selector"><Sparkles /><span>选型</span></Link><Link to="/cart"><ShoppingCart /><span>采购车</span>{cartCount ? <i>{cartCount}</i> : null}</Link><Link to={session ? "/account" : "/login"}><UserRound /><span>我的</span></Link></nav>;
 }
 
 export default App;

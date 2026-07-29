@@ -463,12 +463,22 @@ function LoginPage({ session, onLogin, onToast }: { session: DemoSession | null;
   const [error, setError] = useState("");
   const returnTo = searchParams.get("returnTo");
 
+  const resolveTarget = (activeRole: AccountRole) => {
+    // 登录页允许切换买卖家身份，因此不能把另一个身份的回跳地址继续带过去。
+    // 例如：从 /account 跳到登录页后改选卖家，必须进入 /seller，而不是再被买家守卫拦回登录页。
+    if (activeRole === "seller") {
+      return returnTo?.startsWith("/seller") ? returnTo : "/seller";
+    }
+
+    const buyerPaths = ["/account", "/checkout", "/order-success", "/orders", "/delivery", "/purchase-analysis"];
+    return returnTo && buyerPaths.some((path) => returnTo.startsWith(path)) ? returnTo : "/account";
+  };
+
   const finishLogin = (company: string, phone: string) => {
     const next = createDemoSession({ role, company, phone });
     onLogin(next);
     onToast(role === "seller" ? "已进入卖家工作台（演示账号）" : "已进入买家采购中心（演示账号）");
-    const target = returnTo?.startsWith("/") ? returnTo : role === "seller" ? "/seller" : "/account";
-    navigate(target, { replace: true });
+    navigate(resolveTarget(role), { replace: true });
   };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -504,10 +514,10 @@ function LoginPage({ session, onLogin, onToast }: { session: DemoSession | null;
       <h1 id="login-title">杰帜数控刀具</h1>
       <p>数控精密刀具 · 企业采购服务</p>
       <div className={s.roleTabs} role="tablist" aria-label="选择登录身份">
-        <button data-testid="login-buyer-tab" type="button" role="tab" aria-selected={role === "buyer"} className={role === "buyer" ? s.active : ""} onClick={() => setRole("buyer")}>我是买家</button>
-        <button data-testid="login-seller-tab" type="button" role="tab" aria-selected={role === "seller"} className={role === "seller" ? s.active : ""} onClick={() => setRole("seller")}>我是卖家</button>
+        <button data-testid="login-buyer-tab" type="button" role="tab" aria-selected={role === "buyer"} className={role === "buyer" ? s.active : ""} onClick={() => { setRole("buyer"); setError(""); setCodeSent(false); }}>我是买家</button>
+        <button data-testid="login-seller-tab" type="button" role="tab" aria-selected={role === "seller"} className={role === "seller" ? s.active : ""} onClick={() => { setRole("seller"); setError(""); setCodeSent(false); }}>我是卖家</button>
       </div>
-      {role === "seller" && <p className={s.sellerLoginNotice}><ShieldCheck aria-hidden="true" /> 卖家账号应由杰帜管理员开通；当前仅演示角色分流。</p>}
+      {role === "seller" && <p className={s.sellerLoginNotice}><ShieldCheck aria-hidden="true" /> 卖家账号应由杰帜管理员开通；测试时可直接点击下方“一键进入卖家工作台（演示）”。</p>}
       <form className={s.loginForm} onSubmit={submit} noValidate>
         {role === "seller" && <label><span>注册企业名称</span><div><Building2 aria-hidden="true" /><input name="company" autoComplete="organization" placeholder="请输入注册企业全称" /></div></label>}
         <label><span>手机号码</span><div><Phone aria-hidden="true" /><input name="phone" type="tel" autoComplete="tel" inputMode="numeric" placeholder="请输入手机号" /></div></label>
@@ -518,7 +528,7 @@ function LoginPage({ session, onLogin, onToast }: { session: DemoSession | null;
         <label className={s.agreement}><input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} /><span>我已阅读并同意《用户协议》和《隐私政策》</span></label>
       </form>
       <div className={s.authDivider}><span>其他方式</span></div>
-      <button className={s.wechatDemo} type="button" onClick={quickLogin}>演示快捷登录</button>
+      <button data-testid="quick-demo-login" className={s.wechatDemo} type="button" onClick={quickLogin}>{role === "seller" ? "一键进入卖家工作台（演示）" : "一键进入买家采购中心（演示）"}</button>
       <small className={s.authHint}>当前为前端原型：不会发送短信、不会接入微信，也不创建真实账号。{session ? " 登录将切换当前演示身份。" : ""}</small>
     </section>
   </div>;

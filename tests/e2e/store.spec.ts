@@ -69,6 +69,15 @@ test("买卖家登录分流与卖家工作台", async ({ page }, testInfo) => {
   await page.screenshot({ path: "reference/screenshots/seller-dashboard-" + testInfo.project.name + ".png" });
 });
 
+test("从买家回跳页切换为卖家后进入卖家工作台", async ({ page }) => {
+  await page.goto("/account");
+  await expect(page).toHaveURL(/\/login\?role=buyer/);
+  await page.getByTestId("login-seller-tab").click();
+  await page.getByTestId("quick-demo-login").click();
+  await expect(page).toHaveURL(/\/seller$/);
+  await expect(page.getByRole("heading", { name: "卖家中心" })).toBeVisible();
+});
+
 test("买家登录后进入企业采购中心", async ({ page }, testInfo) => {
   await page.goto("/login?role=buyer&returnTo=%2Faccount");
   await page.getByLabel("手机号码").fill("13812345678");

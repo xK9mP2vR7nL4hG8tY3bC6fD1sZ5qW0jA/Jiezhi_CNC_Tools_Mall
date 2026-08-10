@@ -8,8 +8,8 @@
   },
   "routes": [
     {
-      "pattern": "zhike.xyz/*",
-      "zone_name": "zhike.xyz"
+      "pattern": "jz.zhike.xyz",
+      "custom_domain": true
     }
   ],
   "observability": {

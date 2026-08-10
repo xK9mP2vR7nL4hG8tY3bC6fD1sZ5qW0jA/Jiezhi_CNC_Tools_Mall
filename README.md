@@ -1,6 +1,6 @@
 # 杰帜数控刀具商城
 
-`zhike.xyz` 的响应式国内 B2B 数控刀具商城前端工程。
+[`jz.zhike.xyz`](https://jz.zhike.xyz/) 的响应式国内 B2B 数控刀具商城前端工程。
 
 ## v1.2.1 已实现
 
